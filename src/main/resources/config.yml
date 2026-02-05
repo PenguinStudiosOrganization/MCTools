@@ -1,0 +1,78 @@
+# MCTools Configuration
+
+# ============================================
+# SHAPE GENERATION SETTINGS
+# ============================================
+
+# Maximum blocks per operation (0 = unlimited for ops)
+max-blocks: 50000
+
+# Maximum radius/size allowed
+max-radius: 64
+max-height: 128
+
+# Enable async block placement for large operations
+async-placement: true
+
+# Blocks per tick when placing async (lower = less lag)
+blocks-per-tick: 1000
+
+# Enable undo/redo system
+enable-undo: true
+
+# Maximum operations to store for undo (up to 1000)
+max-undo-history: 1000
+
+# Cooldown between operations (seconds, 0 = disabled)
+cooldown: 0
+
+# Show progress bar for large operations
+show-progress: true
+
+# Preview settings
+preview:
+  # Enable preview mode (shows green glass before placing)
+  # Player will be teleported above the structure
+  enabled: true
+  # Duration of preview in seconds
+  duration: 10
+  # Block to use for preview (must be a glass type for best visibility)
+  block: LIME_STAINED_GLASS
+
+# Sound effects
+sounds:
+  enabled: true
+  on-complete: BLOCK_BEACON_ACTIVATE
+  on-error: BLOCK_ANVIL_LAND
+  on-preview: BLOCK_NOTE_BLOCK_CHIME
+
+# Particle effects on completion
+particles:
+  enabled: true
+  type: HAPPY_VILLAGER
+
+# ============================================
+# TERRAIN BRUSH SETTINGS
+# ============================================
+
+brush:
+  # Enable terrain brush system
+  enabled: true
+  
+  # Permission required to use brush
+  permission: mctools.brush
+  
+  # Maximum brush size (radius)
+  max-size: 50
+  
+  # Maximum height for terrain modifications
+  max-height: 64
+  
+  # Default settings for new players
+  default-size: 10
+  default-intensity: 50
+  default-max-height: 20
+  default-block: GRASS_BLOCK
+  
+  # Folder for heightmap images (inside plugin folder)
+  heightmaps-folder: heightmaps

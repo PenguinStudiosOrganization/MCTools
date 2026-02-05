@@ -1,0 +1,279 @@
+package com.mctools.listeners;
+
+import com.mctools.MCTools;
+import com.mctools.brush.BrushSettings;
+import com.mctools.brush.gui.BlockSelectorGUI;
+import com.mctools.brush.gui.BrushGUI;
+import com.mctools.brush.gui.HeightmapSelectorGUI;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.Location;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.ItemStack;
+
+/**
+ * Handles player events for MCTools.
+ * 
+ * @author MCTools Team
+ * @version 2.0.0
+ */
+public class PlayerListener implements Listener {
+
+    private final MCTools plugin;
+
+    public PlayerListener(MCTools plugin) {
+        this.plugin = plugin;
+    }
+
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        plugin.getUndoManager().clearPlayer(player);
+    }
+
+    /**
+     * Bamboo tool:
+     * - Left click: open brush GUI
+     * - Right click: apply brush on target block
+     */
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onBambooUse(PlayerInteractEvent event) {
+        Player player = event.getPlayer();
+
+        ItemStack item = player.getInventory().getItemInMainHand();
+        if (item.getType() != Material.BAMBOO) return;
+
+        Action action = event.getAction();
+
+        // Left click - always open GUI (even if event was cancelled by other plugins)
+        if (action == Action.LEFT_CLICK_AIR || action == Action.LEFT_CLICK_BLOCK) {
+            event.setCancelled(true);
+            new BrushGUI(plugin, player).open();
+            return;
+        }
+
+        // Right click - apply brush
+        if (action == Action.RIGHT_CLICK_AIR || action == Action.RIGHT_CLICK_BLOCK) {
+            event.setCancelled(true);
+
+            var target = player.getTargetBlockExact(120);
+            if (target == null) return;
+
+            Location targetLoc = target.getLocation();
+            plugin.getBrushManager().getTerrainBrush().apply(player, targetLoc);
+        }
+    }
+
+    /**
+     * Hard-blocks ALL inventory interactions for MCTools GUIs.
+     * Prevents: pickup, move-to-other-inventory, shift-click, hotbar swap,
+     * double click collect, dragging, etc.
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onGuiClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+
+        Inventory top = event.getView().getTopInventory();
+        InventoryHolder holder = top.getHolder();
+        if (!(holder instanceof BrushGUI || holder instanceof HeightmapSelectorGUI || holder instanceof BlockSelectorGUI)) {
+            return;
+        }
+
+        // Always cancel - GUI is non-movable
+        event.setCancelled(true);
+
+        // Ignore clicks in the player inventory area
+        if (event.getClickedInventory() == null || event.getClickedInventory().getType() == InventoryType.PLAYER) {
+            return;
+        }
+
+        // Execute button actions only for top inventory
+        if (holder instanceof BrushGUI) {
+            handleBrushMenuClick(player, (BrushGUI) holder, event.getSlot(), event.isLeftClick(), event.isRightClick(), event.isShiftClick());
+        } else if (holder instanceof HeightmapSelectorGUI) {
+            handleHeightmapSelectorClick(player, (HeightmapSelectorGUI) holder, event.getSlot());
+        } else if (holder instanceof BlockSelectorGUI) {
+            handleBlockSelectorClick(player, (BlockSelectorGUI) holder, event.getSlot());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onGuiDrag(InventoryDragEvent event) {
+        Inventory top = event.getView().getTopInventory();
+        InventoryHolder holder = top.getHolder();
+        if (holder instanceof BrushGUI || holder instanceof HeightmapSelectorGUI || holder instanceof BlockSelectorGUI) {
+            event.setCancelled(true);
+        }
+    }
+
+    private void handleBrushMenuClick(Player player, BrushGUI gui, int slot, boolean left, boolean right, boolean shift) {
+        BrushSettings settings = plugin.getBrushManager().getSettings(player.getUniqueId());
+
+        if (slot == BrushGUI.getSlotToggle()) {
+            settings.toggle();
+            gui.refresh();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotHeightmap()) {
+            new HeightmapSelectorGUI(plugin, player).open();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotBlock()) {
+            new BlockSelectorGUI(plugin, player).open();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotMode()) {
+            BrushSettings.BrushMode[] modes = BrushSettings.BrushMode.values();
+            int idx = settings.getMode().ordinal();
+            settings.setMode(modes[(idx + 1) % modes.length]);
+            gui.refresh();
+            return;
+        }
+
+        // Values
+        if (slot == BrushGUI.getSlotSize()) {
+            int delta = shift ? 5 : 1;
+            if (right) delta = -delta;
+            settings.setSize(clamp(settings.getSize() + delta, 1, plugin.getConfigManager().getBrushMaxSize()));
+            gui.refresh();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotIntensity()) {
+            int delta = shift ? 1 : 10;
+            if (right) delta = -delta;
+            settings.setIntensity(clamp(settings.getIntensity() + delta, 1, 100));
+            gui.refresh();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotMaxHeight()) {
+            int delta = shift ? 5 : 1;
+            if (right) delta = -delta;
+            settings.setMaxHeight(clamp(settings.getMaxHeight() + delta, 1, plugin.getConfigManager().getBrushMaxHeight()));
+            gui.refresh();
+            return;
+        }
+
+        // Options
+        if (slot == BrushGUI.getSlotAutoSmooth()) {
+            settings.toggleAutoSmooth();
+            gui.refresh();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotSmoothStrength()) {
+            int delta = right ? -1 : 1;
+            settings.setSmoothStrength(clamp(settings.getSmoothStrength() + delta, 1, 5));
+            gui.refresh();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotAutoRotation()) {
+            settings.toggleAutoRotation();
+            gui.refresh();
+            return;
+        }
+
+        if (slot == BrushGUI.getSlotCircular()) {
+            settings.toggleCircularMask();
+            gui.refresh();
+            return;
+        }
+        
+        if (slot == BrushGUI.getSlotPreview()) {
+            settings.togglePreview();
+            gui.refresh();
+        }
+    }
+
+    private void handleHeightmapSelectorClick(Player player, HeightmapSelectorGUI gui, int slot) {
+        int navRow = gui.getInventory().getSize() - 9;
+
+        // Back
+        if (slot == navRow) {
+            new BrushGUI(plugin, player).open();
+            return;
+        }
+
+        // Prev / Next
+        if (slot == navRow + 3) {
+            gui.previousPage();
+            return;
+        }
+        if (slot == navRow + 5) {
+            gui.nextPage();
+            return;
+        }
+
+        // Reload
+        if (slot == navRow + 8) {
+            plugin.getBrushManager().reload();
+            new HeightmapSelectorGUI(plugin, player, gui.getPage()).open();
+            return;
+        }
+
+        // Select
+        if (slot >= 0 && slot < navRow) {
+            String hm = gui.getHeightmapAt(slot);
+            if (hm == null) return;
+            if (!plugin.getBrushManager().hasHeightmap(hm)) return;
+
+            BrushSettings settings = plugin.getBrushManager().getSettings(player.getUniqueId());
+            settings.setHeightmapName(hm);
+            settings.setHeightmapImage(plugin.getBrushManager().getHeightmap(hm));
+
+            // Auto-return to main menu
+            new BrushGUI(plugin, player).open();
+        }
+    }
+
+    private void handleBlockSelectorClick(Player player, BlockSelectorGUI gui, int slot) {
+        int navRow = 45;
+
+        // Back
+        if (slot == navRow) {
+            new BrushGUI(plugin, player).open();
+            return;
+        }
+
+        // Prev / Next
+        if (slot == navRow + 3) {
+            gui.previousPage();
+            return;
+        }
+        if (slot == navRow + 5) {
+            gui.nextPage();
+            return;
+        }
+
+        // Select
+        if (slot >= 0 && slot < navRow) {
+            Material block = gui.getBlockAt(slot);
+            if (block == null) return;
+
+            BrushSettings settings = plugin.getBrushManager().getSettings(player.getUniqueId());
+            settings.setBlock(block);
+
+            // Auto-return to main menu
+            new BrushGUI(plugin, player).open();
+        }
+    }
+
+    private int clamp(int v, int min, int max) {
+        return Math.max(min, Math.min(max, v));
+    }
+}
