@@ -38,6 +38,57 @@ public class BlockPlacer {
     }
 
     /**
+     * Places blocks with different materials (for trees and other multi-block structures).
+     */
+    public void placeMultiBlocks(Player player, Map<Location, Material> blocks, String shapeName) {
+        Map<Location, BlockData> blockDataMap = new LinkedHashMap<>();
+        for (Map.Entry<Location, Material> entry : blocks.entrySet()) {
+            blockDataMap.put(entry.getKey(), entry.getValue().createBlockData());
+        }
+        placeGradientBlocks(player, blockDataMap, shapeName);
+    }
+
+    /**
+     * Places gradient blocks (different block type per position) with optional preview.
+     */
+    public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName) {
+        if (blockMap.isEmpty()) {
+            plugin.getMessageUtil().sendError(player, "No blocks to place!");
+            return;
+        }
+
+        List<Location> blocks = new ArrayList<>(blockMap.keySet());
+
+        String safetyCheck = plugin.getPerformanceMonitor().checkOperationSafety(blocks.size());
+        if (safetyCheck != null) {
+            plugin.getMessageUtil().sendError(player, safetyCheck);
+            playErrorEffects(player);
+            return;
+        }
+
+        cancelTask(player);
+        cancelPreview(player);
+
+        Map<Location, BlockData> originalBlocks = new LinkedHashMap<>();
+        for (Location loc : blocks) {
+            if (loc.getWorld() != null) {
+                originalBlocks.put(loc.clone(), loc.getBlock().getBlockData().clone());
+            }
+        }
+
+        teleportAboveStructure(player, blocks);
+
+        ConfigManager config = plugin.getConfigManager();
+        if (config.isPreviewEnabled()) {
+            PreviewTask previewTask = new PreviewTask(player, blocks, null, originalBlocks, shapeName, blockMap);
+            previewTasks.put(player.getUniqueId(), previewTask);
+            previewTask.start();
+        } else {
+            startPlacement(player, blocks, null, originalBlocks, shapeName, blockMap);
+        }
+    }
+
+    /**
      * Places blocks with optional preview animation.
      * Teleports player above the structure to avoid getting stuck.
      */
@@ -120,17 +171,23 @@ public class BlockPlacer {
     /**
      * Starts the actual block placement (called after preview or directly).
      */
-    private void startPlacement(Player player, List<Location> blocks, BlockData blockData, 
+    private void startPlacement(Player player, List<Location> blocks, BlockData blockData,
                                 Map<Location, BlockData> originalBlocks, String shapeName) {
-        
+        startPlacement(player, blocks, blockData, originalBlocks, shapeName, null);
+    }
+
+    private void startPlacement(Player player, List<Location> blocks, BlockData blockData,
+                                Map<Location, BlockData> originalBlocks, String shapeName,
+                                Map<Location, BlockData> gradientMap) {
+
         PerformanceMonitor perfMon = plugin.getPerformanceMonitor();
-        
+
         // Professional start message
         plugin.getMessageUtil().sendInfo(player, "<gradient:#10b981:#059669>▶ Starting generation...</gradient>");
         plugin.getMessageUtil().sendInfo(player, "<dark_gray>┃</dark_gray> <gray>Blocks:</gray> <white>" + formatNumber(blocks.size()) + "</white> <dark_gray>│</dark_gray> " + perfMon.getCompactStatusMiniMessage());
-        
+
         // Create and start the placement task
-        PlacementTask task = new PlacementTask(player, blocks, blockData, originalBlocks, shapeName);
+        PlacementTask task = new PlacementTask(player, blocks, blockData, originalBlocks, shapeName, gradientMap);
         activeTasks.put(player.getUniqueId(), task);
         task.runTaskTimer(plugin, 0L, 1L);
     }
@@ -243,23 +300,31 @@ public class BlockPlacer {
         private final BlockData finalBlockData;
         private final Map<Location, BlockData> originalBlocks;
         private final String shapeName;
+        private final Map<Location, BlockData> gradientMap;
         private BukkitTask countdownTask;
         private BukkitTask previewPlacementTask;
         private int secondsRemaining;
         private boolean cancelled = false;
         private boolean generationStarted = false;
         private boolean paused = false;
-        
+
         public boolean isPaused() { return paused; }
         public void setPaused(boolean paused) { this.paused = paused; }
 
         public PreviewTask(Player player, List<Location> blocks, BlockData finalBlockData,
                           Map<Location, BlockData> originalBlocks, String shapeName) {
+            this(player, blocks, finalBlockData, originalBlocks, shapeName, null);
+        }
+
+        public PreviewTask(Player player, List<Location> blocks, BlockData finalBlockData,
+                          Map<Location, BlockData> originalBlocks, String shapeName,
+                          Map<Location, BlockData> gradientMap) {
             this.player = player;
             this.blocks = blocks;
             this.finalBlockData = finalBlockData;
             this.originalBlocks = originalBlocks;
             this.shapeName = shapeName;
+            this.gradientMap = gradientMap;
             this.secondsRemaining = plugin.getConfigManager().getPreviewDuration();
         }
 
@@ -354,9 +419,9 @@ public class BlockPlacer {
         private void startGenerationPhase() {
             generationStarted = true;
             player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.2f);
-            
+
             // Start the actual placement
-            startPlacement(player, blocks, finalBlockData, originalBlocks, shapeName);
+            startPlacement(player, blocks, finalBlockData, originalBlocks, shapeName, gradientMap);
         }
 
         private void restoreOriginal() {
@@ -391,6 +456,7 @@ public class BlockPlacer {
         private final BlockData blockData;
         private final Map<Location, BlockData> originalBlocks;
         private final String shapeName;
+        private final Map<Location, BlockData> gradientMap;
 
         private int currentIndex = 0;
         private int lastProgressPercent = -1;
@@ -398,16 +464,23 @@ public class BlockPlacer {
         private long startTime;
         private long lastStatusUpdate = 0;
         private int totalBlocksPlaced = 0;
-        
+
         public PlacementTask(Player player, List<Location> blocks, BlockData blockData,
                            Map<Location, BlockData> originalBlocks, String shapeName) {
+            this(player, blocks, blockData, originalBlocks, shapeName, null);
+        }
+
+        public PlacementTask(Player player, List<Location> blocks, BlockData blockData,
+                           Map<Location, BlockData> originalBlocks, String shapeName,
+                           Map<Location, BlockData> gradientMap) {
             this.player = player;
             this.blocks = new ArrayList<>(blocks);
             this.blockData = blockData;
             this.originalBlocks = originalBlocks;
             this.shapeName = shapeName;
+            this.gradientMap = gradientMap;
             this.startTime = System.currentTimeMillis();
-            
+
             // Sort blocks by distance from player for nice animation
             Location center = player.getLocation();
             this.blocks.sort((a, b) -> {
@@ -470,7 +543,10 @@ public class BlockPlacer {
                     Location loc = blocks.get(i);
                     if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
                         Block block = loc.getBlock();
-                        block.setBlockData(blockData, false);
+                        BlockData data = gradientMap != null ? gradientMap.get(loc) : blockData;
+                        if (data != null) {
+                            block.setBlockData(data, false);
+                        }
                         blocksThisTick++;
                     }
                 }

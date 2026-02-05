@@ -24,7 +24,7 @@ import org.bukkit.plugin.java.JavaPlugin;
  * - Advanced undo/redo system (up to 1000 operations)
  * - Async block placement
  * 
- * @author MCTools Team
+ * @author PenguinStudios
  * @version 2.0.0
  */
 public final class MCTools extends JavaPlugin {
@@ -85,9 +85,9 @@ public final class MCTools extends JavaPlugin {
         System.out.println(C + B + "  ║" + R + W + "       Advanced Shape Generation           " + R + C + B + "║" + R);
         System.out.println(C + B + "  ╠════════════════════════════════════════════╣" + R);
         System.out.println(C + B + "  ║" + R + GR + " Version:  " + W + "v" + version + R + padSpaces(32 - version.length()) + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Author:   " + W + "MCTools Team" + R + "                     " + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + GR + " GitHub:   " + BL + "github.com/MCTools/MCTools" + R + "       " + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Discord:  " + M + "discord.gg/mctools" + R + "               " + C + B + "║" + R);
+        System.out.println(C + B + "  ║" + R + GR + " Author:   " + W + "PenguinStudios" + R + "                   " + C + B + "║" + R);
+        System.out.println(C + B + "  ║" + R + GR + " Web:      " + BL + "https://mcutils.net/shapegenerator" + R + C + B + "║" + R);
+        System.out.println(C + B + "  ║" + R + GR + " Discord:  " + M + "https://discord.penguinstudios.eu" + R + C + B + "║" + R);
         System.out.println(C + B + "  ╠════════════════════════════════════════════╣" + R);
         System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Configuration loaded" + R + "                   " + C + B + "║" + R);
         System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Commands registered" + R + "                    " + C + B + "║" + R);
