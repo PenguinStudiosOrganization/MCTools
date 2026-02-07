@@ -22,10 +22,20 @@ import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 
 /**
- * Handles player events for MCTools.
- * 
- * @author MCTools Team
- * @version 2.0.0
+ * Bukkit event listener for MCTools.
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>Handle bamboo tool interactions (left-click → GUI, right-click → brush apply).</li>
+ *   <li>Route GUI clicks to the appropriate handler (BrushGUI, HeightmapSelector, BlockSelector).</li>
+ *   <li>Clean up player data on quit (undo history).</li>
+ * </ul>
+ *
+ * <p>Design notes:
+ * <ul>
+ *   <li>All GUI inventories are non-movable; clicks are cancelled and handled manually.</li>
+ *   <li>Event priority is HIGHEST to ensure we intercept before other plugins.</li>
+ * </ul>
  */
 public class PlayerListener implements Listener {
 

@@ -14,6 +14,18 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
+ * Main plugin class.
+ *
+ * <p>This plugin provides advanced tools for Minecraft builders:
+ * shapes (2D/3D), terrain brush, preview, undo/redo and async placement.</p>
+ *
+ * <p>Project:
+ * <ul>
+ *   <li>Team: PenguinStudios</li>
+ *   <li>Website: https://mcutils.net/</li>
+ *   <li>Releases: https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release</li>
+ * </ul>
+ * </p>
  * MCTools - Advanced shape generation tool for Minecraft builders.
  * 
  * Features:
@@ -44,31 +56,40 @@ public final class MCTools extends JavaPlugin {
     @Override
     public void onEnable() {
         instance = this;
-        
+
         long startTime = System.currentTimeMillis();
-        
-        // Initialize managers
-        this.configManager = new ConfigManager(this);
-        this.undoManager = new UndoManager(this);
-        this.messageUtil = new MessageUtil();
-        this.performanceMonitor = new PerformanceMonitor(this);
-        this.blockPlacer = new BlockPlacer(this);
-        this.brushManager = new BrushManager(this);
-        
-        // Register commands
+
+        // Core services used by commands/listeners.
+        configManager = new ConfigManager(this);
+        undoManager = new UndoManager(this);
+        messageUtil = new MessageUtil();
+        performanceMonitor = new PerformanceMonitor(this);
+        blockPlacer = new BlockPlacer(this);
+        brushManager = new BrushManager(this);
+
+        // Commands and listeners.
         registerCommands();
-        
-        // Register listeners
         getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
-        
+
         long loadTime = System.currentTimeMillis() - startTime;
-        
-        printStartupBanner(loadTime);
+
+        // Keep startup logs simple and consistent with the server logger.
+        logStartup(loadTime);
     }
     
-    private void printStartupBanner(long loadTime) {
+    /**
+     * Startup log.
+     *
+     * <p>Keep logs readable in any console (no ANSI art), and use the plugin logger
+     * so messages are properly tagged by the server.</p>
+     */
+    private void logStartup(long loadTimeMs) {
         String version = getDescription().getVersion();
-        
+        getLogger().info("Enabled MCTools v" + version + " (" + loadTimeMs + "ms)");
+        getLogger().info("Team: PenguinStudios");
+        getLogger().info("Website: https://mcutils.net/");
+        getLogger().info("Download: https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release");
+
         final String R = "\u001B[0m";
         final String B = "\u001B[1m";
         final String C = "\u001B[36m";
@@ -108,13 +129,17 @@ public final class MCTools extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        // Stop background tasks first.
         if (performanceMonitor != null) {
             performanceMonitor.stop();
         }
+
+        // Free memory used by undo history.
         if (undoManager != null) {
             undoManager.clearAll();
         }
-        getLogger().info("MCTools has been disabled!");
+
+        getLogger().info("Disabled MCTools");
         instance = null;
     }
 
@@ -136,13 +161,16 @@ public final class MCTools extends JavaPlugin {
         }
     }
 
+    /** Reload config and refresh managers that depend on it. */
     public void reloadPluginConfig() {
         reloadConfig();
         configManager.reload();
+
         if (brushManager != null) {
             brushManager.reload();
         }
-        getLogger().info("Configuration reloaded!");
+
+        getLogger().info("Configuration reloaded");
     }
 
     public ConfigManager getConfigManager() {

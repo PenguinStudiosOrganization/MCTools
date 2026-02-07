@@ -14,16 +14,22 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.*;
 
 /**
- * Handles block placement with preview, animation, and performance-aware generation.
- * 
- * Features:
- * - Preview mode with configurable glass blocks
- * - Teleports player above preview to avoid getting stuck
- * - Adaptive speed based on server TPS and RAM
- * - Auto-cancellation if server is under heavy load
- * 
- * @author MCTools Team
- * @version 2.1.0
+ * World-edit execution engine for MCTools.
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>Place a list/map of blocks, optionally after a preview phase.</li>
+ *   <li>Adapt placement speed based on server performance (TPS/RAM).</li>
+ *   <li>Integrate with {@link UndoManager} by storing original block data.</li>
+ *   <li>Provide user feedback (progress/completion) and cancellation controls.</li>
+ * </ul>
+ *
+ * <p>Implementation notes:
+ * <ul>
+ *   <li>Preview and placement are tracked per-player to avoid overlapping operations.</li>
+ *   <li>Placement is performed on the main thread (Bukkit scheduler), chunk-loaded guarded.</li>
+ *   <li>When server health drops below safety thresholds, operations are cancelled and restored.</li>
+ * </ul>
  */
 public class BlockPlacer {
 
@@ -38,7 +44,11 @@ public class BlockPlacer {
     }
 
     /**
+     * Places blocks with different materials (e.g. trees / multi-block structures).
+     *
+     * <p>This is a convenience wrapper that converts {@link Material} to {@link BlockData}.</p>
      * Places blocks with different materials (for trees and other multi-block structures).
+
      */
     public void placeMultiBlocks(Player player, Map<Location, Material> blocks, String shapeName) {
         Map<Location, BlockData> blockDataMap = new LinkedHashMap<>();
@@ -49,6 +59,9 @@ public class BlockPlacer {
     }
 
     /**
+     * Places blocks where each position can have a different {@link BlockData}.
+     *
+     * <p>Used by gradient and procedural generators.</p>
      * Places gradient blocks (different block type per position) with optional preview.
      */
     public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName) {
@@ -165,7 +178,7 @@ public class BlockPlacer {
         }
         
         player.teleport(teleportLoc);
-        plugin.getMessageUtil().sendInfo(player, "Teleported above structure.");
+        plugin.getMessageUtil().sendInfo(player, "Teleported above the structure.");
     }
 
     /**
@@ -182,7 +195,9 @@ public class BlockPlacer {
 
         PerformanceMonitor perfMon = plugin.getPerformanceMonitor();
 
-        // Professional start message
+        // Start message.
+        plugin.getMessageUtil().sendInfo(player, "Starting generation...");
+        plugin.getMessageUtil().sendInfo(player, "Blocks: " + formatNumber(blocks.size()) + " | " + perfMon.getCompactStatusMiniMessage());
         plugin.getMessageUtil().sendInfo(player, "<gradient:#10b981:#059669>▶ Starting generation...</gradient>");
         plugin.getMessageUtil().sendInfo(player, "<dark_gray>┃</dark_gray> <gray>Blocks:</gray> <white>" + formatNumber(blocks.size()) + "</white> <dark_gray>│</dark_gray> " + perfMon.getCompactStatusMiniMessage());
 
@@ -332,8 +347,8 @@ public class BlockPlacer {
             ConfigManager config = plugin.getConfigManager();
             Material previewMaterial = config.getPreviewBlock();
             
-            plugin.getMessageUtil().sendInfo(player, "Showing preview. Generation in <#10b981>" + secondsRemaining + "</#10b981>s...");
-            plugin.getMessageUtil().sendInfo(player, "Use <#10b981>/mct cancel</#10b981> to abort.");
+            plugin.getMessageUtil().sendInfo(player, "Showing preview. Generation in " + secondsRemaining + "s...");
+            plugin.getMessageUtil().sendInfo(player, "Use /mct cancel to abort.");
 
             BlockData previewData = previewMaterial.createBlockData();
             
@@ -390,7 +405,7 @@ public class BlockPlacer {
                     
                     // Check server performance during preview
                     if (plugin.getPerformanceMonitor().shouldCancelOperation()) {
-                        plugin.getMessageUtil().sendError(player, "<red>⚠ Operation cancelled due to server overload!</red>");
+                        plugin.getMessageUtil().sendError(player, "Operation cancelled due to server overload.");
                         plugin.getMessageUtil().sendInfo(player, plugin.getPerformanceMonitor().getPerformanceStatusMiniMessage());
                         cancelPreviewAndRestore();
                         return;
@@ -405,7 +420,7 @@ public class BlockPlacer {
                         startGenerationPhase();
                     } else if (secondsRemaining <= 3) {
                         player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
-                        plugin.getMessageUtil().sendInfo(player, "Generating in <#10b981>" + secondsRemaining + "</#10b981>...");
+                        plugin.getMessageUtil().sendInfo(player, "Generating in " + secondsRemaining + "...");
                     }
                 }
             }.runTaskTimer(plugin, 20L, 20L);
@@ -519,7 +534,7 @@ public class BlockPlacer {
                 // Check for emergency - cancel operation
                 PerformanceMonitor perfMon = plugin.getPerformanceMonitor();
                 if (perfMon.shouldCancelOperation()) {
-                    plugin.getMessageUtil().sendError(player, "<dark_red>⚠ EMERGENCY: Operation cancelled due to server overload!</dark_red>");
+                    plugin.getMessageUtil().sendError(player, "Emergency: operation cancelled due to server overload.");
                     plugin.getMessageUtil().sendInfo(player, perfMon.getPerformanceStatusMiniMessage());
                     cancelAndRestore();
                     activeTasks.remove(player.getUniqueId());
@@ -577,13 +592,14 @@ public class BlockPlacer {
                         }
                     }
                     
-                    // Professional progress message
-                    plugin.getMessageUtil().sendInfo(player, 
-                        "<dark_gray>┃</dark_gray> " + bar.toString() + " <white>" + percent + "%</white>");
-                    plugin.getMessageUtil().sendInfo(player, 
-                        "<dark_gray>┃</dark_gray> <gray>Progress:</gray> <white>" + formatNumber(currentIndex) + "</white><gray>/</gray><white>" + formatNumber(blocks.size()) + "</white>" +
-                        " <dark_gray>│</dark_gray> <gray>Speed:</gray> <yellow>" + formatNumber(blocksPerSecond) + "</yellow><gray>/s</gray>" +
-                        " <dark_gray>│</dark_gray> <gray>ETA:</gray> <white>" + formatTime(etaSeconds) + "</white>");
+                    // Progress message.
+                    plugin.getMessageUtil().sendInfo(player, "Progress: " + percent + "%");
+                    plugin.getMessageUtil().sendInfo(
+                            player,
+                            "Placed " + formatNumber(currentIndex) + "/" + formatNumber(blocks.size()) +
+                                    " | Speed " + formatNumber(blocksPerSecond) + "/s" +
+                                    " | ETA " + formatTime(etaSeconds)
+                    );
                     plugin.getMessageUtil().sendInfo(player, perfMon.getDetailedStatusMiniMessage());
                 }
 
@@ -607,24 +623,24 @@ public class BlockPlacer {
                     
                     plugin.getUndoManager().saveOperation(player, originalBlocks);
                     
-                    // Professional completion message
-                    plugin.getMessageUtil().sendInfo(player, "<gradient:#10b981:#059669>✓ Generation Complete!</gradient>");
-                    plugin.getMessageUtil().sendInfo(player, 
-                        "<dark_gray>┃</dark_gray> <gray>Shape:</gray> <white>" + shapeName + "</white>" +
-                        " <dark_gray>│</dark_gray> <gray>Blocks:</gray> <white>" + formatNumber(blocks.size()) + "</white>");
-                    plugin.getMessageUtil().sendInfo(player, 
-                        "<dark_gray>┃</dark_gray> <gray>Time:</gray> <white>" + formatTime(totalTime) + "</white>" +
-                        " <dark_gray>│</dark_gray> <gray>Avg Speed:</gray> <yellow>" + formatNumber((int)avgSpeed) + "</yellow><gray>/s</gray>");
+                    // Completion message.
+                    plugin.getMessageUtil().sendInfo(player, "Generation complete.");
+                    plugin.getMessageUtil().sendInfo(
+                            player,
+                            "Shape: " + shapeName +
+                                    " | Blocks: " + formatNumber(blocks.size()) +
+                                    " | Time: " + formatTime(totalTime) +
+                                    " | Avg speed: " + formatNumber((int) avgSpeed) + "/s"
+                    );
                     
                     playCompletionEffects(player);
                 }
                 
             } catch (Exception e) {
                 plugin.getLogger().severe("Error in PlacementTask: " + e.getMessage());
-                e.printStackTrace();
                 cancel();
                 activeTasks.remove(player.getUniqueId());
-                plugin.getMessageUtil().sendError(player, "<red>Error during placement: " + e.getMessage() + "</red>");
+                plugin.getMessageUtil().sendError(player, "Error during placement: " + e.getMessage());
             }
         }
     }

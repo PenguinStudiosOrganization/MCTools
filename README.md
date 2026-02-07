@@ -2,6 +2,12 @@
 
 Advanced shape generation tool for Minecraft builders.
 
+## Project
+
+- **Development team**: PenguinStudios
+- **Official website**: https://mcutils.net/
+- **Downloads (GitHub Releases)**: https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release
+
 ## Features
 
 - **2D Shapes**: Circles, squares, rectangles, ellipses, polygons, stars, lines, spirals

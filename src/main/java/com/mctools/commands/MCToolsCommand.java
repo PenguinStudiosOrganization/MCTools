@@ -21,13 +21,22 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Main command executor for MCTools plugin.
- * 
- * <p>Handles all shape generation commands, admin commands,
- * and provides comprehensive error handling and feedback.</p>
- * 
- * @author MCTools Team
- * @version 1.0.0
+ * Command executor for {@code /mct} (alias {@code /mctools}).
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>Parse sub-commands (shapes, admin, gradient, tree).</li>
+ *   <li>Validate arguments and permissions.</li>
+ *   <li>Delegate block placement to {@link BlockPlacer}.</li>
+ *   <li>Provide user feedback (help, errors, suggestions).</li>
+ * </ul>
+ *
+ * <p>Design notes:
+ * <ul>
+ *   <li>Cooldowns are tracked per-player to prevent spam.</li>
+ *   <li>Shape creation is delegated to {@link Shape} subclasses.</li>
+ *   <li>Gradient commands use {@link GradientEngine} for color interpolation.</li>
+ * </ul>
  */
 public class MCToolsCommand implements CommandExecutor {
 
@@ -1230,11 +1239,11 @@ public class MCToolsCommand implements CommandExecutor {
         String version = plugin.getDescription().getVersion();
         
         // Header with gradient
-        player.sendMessage(msg.parse("<newline><gradient:#10b981:#059669><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient>"));
+        player.sendMessage(msg.parse("<newline><gradient:#00d4ff:#0099cc><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient>"));
         player.sendMessage(msg.parse(""));
         
         // Logo/Title
-        player.sendMessage(msg.parse("        <gradient:#10b981:#3b82f6><bold>⬡ MCTools ⬡</bold></gradient>"));
+        player.sendMessage(msg.parse("        <gradient:#00d4ff:#3b82f6><bold>⬡ MCTools ⬡</bold></gradient>"));
         player.sendMessage(msg.parse("        <gray>Advanced Shape Generation</gray>"));
         player.sendMessage(msg.parse(""));
         
@@ -1242,28 +1251,25 @@ public class MCToolsCommand implements CommandExecutor {
         player.sendMessage(msg.parse("  <" + MessageUtil.CMD_COLOR + ">▸</" + MessageUtil.CMD_COLOR + "> <gray>Version:</gray> <white>" + version + "</white>"));
         
         // Creator
-        player.sendMessage(msg.parse("  <" + MessageUtil.BLOCK_COLOR + ">▸</" + MessageUtil.BLOCK_COLOR + "> <gray>Created by:</gray> <gradient:#f97316:#ef4444><bold>PenguinStudios Development</bold></gradient>"));
+        player.sendMessage(msg.parse("  <" + MessageUtil.BLOCK_COLOR + ">▸</" + MessageUtil.BLOCK_COLOR + "> <gray>Created by:</gray> <click:open_url:'https://penguinstudios.eu/'><hover:show_text:'<gray>Visit PenguinStudios!</gray>'><gradient:#00d4ff:#5bcefa><bold>PenguinStudios</bold></gradient></hover></click>"));
         
         // Website
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("  <" + MessageUtil.HEIGHT_COLOR + ">▸</" + MessageUtil.HEIGHT_COLOR + "> <gray>Website:</gray> <click:open_url:'https://mcutils.net'><hover:show_text:'<gray>Click to visit!</gray>'><#3b82f6><underlined>mcutils.net</underlined></#3b82f6></hover></click>"));
+        player.sendMessage(msg.parse("  <" + MessageUtil.HEIGHT_COLOR + ">▸</" + MessageUtil.HEIGHT_COLOR + "> <gray>Website:</gray> <click:open_url:'https://mcutils.net/'><hover:show_text:'<gray>Click to visit!</gray>'><#3b82f6><underlined>mcutils.net</underlined></#3b82f6></hover></click>"));
         
-        // Wiki
-        player.sendMessage(msg.parse("  <" + MessageUtil.THICK_COLOR + ">▸</" + MessageUtil.THICK_COLOR + "> <gray>Wiki:</gray> <click:open_url:'https://docs.mcutils.net'><hover:show_text:'<gray>Click to visit!</gray>'><#a855f7><underlined>docs.mcutils.net</underlined></#a855f7></hover></click>"));
-        
-        // GitHub
-        player.sendMessage(msg.parse("  <" + MessageUtil.RADIUS_COLOR + ">▸</" + MessageUtil.RADIUS_COLOR + "> <gray>GitHub:</gray> <click:open_url:'https://github.com/PenguinStudios/MCTools'><hover:show_text:'<gray>Click to visit!</gray>'><#ef4444><underlined>github.com/PenguinStudios/MCTools</underlined></#ef4444></hover></click>"));
+        // GitHub/Download
+        player.sendMessage(msg.parse("  <" + MessageUtil.RADIUS_COLOR + ">▸</" + MessageUtil.RADIUS_COLOR + "> <gray>Download:</gray> <click:open_url:'https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release'><hover:show_text:'<gray>Click to download!</gray>'><#00d4ff><underlined>GitHub Releases</underlined></#00d4ff></hover></click>"));
         
         // Spacer
         player.sendMessage(msg.parse(""));
         
         // Thank you message
-        player.sendMessage(msg.parse("  <gradient:#10b981:#059669>♥</gradient> <gray>Thank you for using</gray> <gradient:#10b981:#3b82f6><bold>MCTools</bold></gradient><gray>!</gray>"));
+        player.sendMessage(msg.parse("  <gradient:#00d4ff:#5bcefa>♥</gradient> <gray>Thank you for using</gray> <gradient:#00d4ff:#3b82f6><bold>MCTools</bold></gradient><gray>!</gray>"));
         player.sendMessage(msg.parse("    <dark_gray>Your support helps us create better tools</dark_gray>"));
         player.sendMessage(msg.parse("    <dark_gray>for the Minecraft building community.</dark_gray>"));
         
         // Footer
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("<gradient:#10b981:#059669><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient><newline>"));
+        player.sendMessage(msg.parse("<gradient:#00d4ff:#0099cc><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient><newline>"));
     }
 }

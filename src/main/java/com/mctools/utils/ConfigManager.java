@@ -5,10 +5,20 @@ import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 
 /**
- * Manages plugin configuration loading and access.
- * 
- * @author MCTools Team
- * @version 2.0.0
+ * Centralized access to plugin configuration values.
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>Load and cache values from {@code config.yml}.</li>
+ *   <li>Provide typed getters for all configurable options.</li>
+ *   <li>Handle reload requests from admin commands.</li>
+ * </ul>
+ *
+ * <p>Design notes:
+ * <ul>
+ *   <li>Values are cached in fields to avoid repeated YAML lookups.</li>
+ *   <li>Invalid material names fall back to safe defaults.</li>
+ * </ul>
  */
 public class ConfigManager {
 
