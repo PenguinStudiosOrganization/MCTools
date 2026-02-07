@@ -1,6 +1,8 @@
 package com.mctools.commands;
 
 import com.mctools.MCTools;
+import com.mctools.gradient.GradientApplier;
+import com.mctools.gradient.GradientEngine;
 import com.mctools.shapes.*;
 import com.mctools.utils.BlockPlacer;
 import com.mctools.utils.ConfigManager;
@@ -15,29 +17,47 @@ import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.*;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
- * Main command executor for MCTools plugin.
- * 
- * <p>Handles all shape generation commands, admin commands,
- * and provides comprehensive error handling and feedback.</p>
- * 
- * @author MCTools Team
- * @version 1.0.0
+ * Command executor for {@code /mct} (alias {@code /mctools}).
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>Parse sub-commands (shapes, admin, gradient, tree).</li>
+ *   <li>Validate arguments and permissions.</li>
+ *   <li>Delegate block placement to {@link BlockPlacer}.</li>
+ *   <li>Provide user feedback (help, errors, suggestions).</li>
+ * </ul>
+ *
+ * <p>Design notes:
+ * <ul>
+ *   <li>Cooldowns are tracked per-player to prevent spam.</li>
+ *   <li>Shape creation is delegated to {@link Shape} subclasses.</li>
+ *   <li>Gradient commands use {@link GradientEngine} for color interpolation.</li>
+ * </ul>
  */
 public class MCToolsCommand implements CommandExecutor {
 
+    private static final Pattern HEX_COLORS_PATTERN =
+        Pattern.compile("^#?[0-9a-fA-F]{6}(,#?[0-9a-fA-F]{6}){1,5}$");
+
     private final MCTools plugin;
     private final Map<UUID, Long> cooldowns;
+    private final GradientEngine gradientEngine;
+    private final GradientApplier gradientApplier;
 
     /**
      * Creates a new MCToolsCommand instance.
-     * 
+     *
      * @param plugin The plugin instance
      */
     public MCToolsCommand(MCTools plugin) {
         this.plugin = plugin;
         this.cooldowns = new HashMap<>();
+        this.gradientEngine = new GradientEngine();
+        this.gradientApplier = new GradientApplier();
     }
     
     /**
@@ -265,6 +285,18 @@ public class MCToolsCommand implements CommandExecutor {
      * Handles shape generation commands.
      */
     private void handleShapeCommand(Player player, String shapeCmd, String[] args) {
+        // Check if this is a tree command
+        if (shapeCmd.equals("tree")) {
+            handleTreeCommand(player, args);
+            return;
+        }
+
+        // Check if this is a gradient command
+        if (shapeCmd.startsWith("g")) {
+            handleGradientCommand(player, shapeCmd, args);
+            return;
+        }
+
         MessageUtil msg = plugin.getMessageUtil();
         ConfigManager config = plugin.getConfigManager();
 
@@ -295,7 +327,7 @@ public class MCToolsCommand implements CommandExecutor {
         // Check estimated block count
         int estimated = shape.getEstimatedBlockCount();
         int maxBlocks = config.getMaxBlocks();
-        
+
         if (maxBlocks > 0 && estimated > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
             msg.sendError(player, "Operation would place ~" + estimated + " blocks (max: " + maxBlocks + ")");
             return;
@@ -318,6 +350,262 @@ public class MCToolsCommand implements CommandExecutor {
 
         msg.sendInfo(player, "Preparing " + shape.getName() + " with " + blocks.size() + " blocks...");
         getBlockPlacer().placeBlocks(player, blocks, blockData, shape.getName());
+    }
+
+    /**
+     * Handles gradient shape commands (g-prefixed).
+     */
+    private void handleGradientCommand(Player player, String cmd, String[] args) {
+        MessageUtil msg = plugin.getMessageUtil();
+        ConfigManager config = plugin.getConfigManager();
+
+        // Permission check
+        if (!player.hasPermission("mctools.gradient")) {
+            msg.sendError(player, "You don't have permission to use gradient shapes!");
+            return;
+        }
+
+        // Strip 'g' prefix to get base command: "gsph" -> "sph", "ghsph" -> "hsph"
+        String baseCmd = cmd.substring(1);
+
+        // Validate minimum args: /mct g<shape> <colors> <params...>
+        if (args.length < 3) {
+            msg.sendUsage(player, "/mct " + cmd + " <#hex1,#hex2,...> <params...> [-dir y|x|z|radial] [-interp oklab|lab|rgb|hsl] [-unique]");
+            return;
+        }
+
+        // Parse and validate hex colors
+        String colorsArg = args[1];
+        if (!HEX_COLORS_PATTERN.matcher(colorsArg).matches()) {
+            msg.sendError(player, "Invalid colors! Use comma-separated hex: #ff0000,#0000ff");
+            return;
+        }
+
+        List<String> hexColors = new ArrayList<>();
+        for (String c : colorsArg.split(",")) {
+            if (!c.startsWith("#")) c = "#" + c;
+            hexColors.add(c.toLowerCase());
+        }
+
+        if (hexColors.size() < 2 || hexColors.size() > 6) {
+            msg.sendError(player, "Provide 2-6 colors!");
+            return;
+        }
+
+        // Scan for optional flags and separate them from positional args
+        String direction = "y";
+        String interpolation = "oklab";
+        boolean uniqueOnly = false;
+        List<String> positionalArgs = new ArrayList<>();
+        positionalArgs.add(args[0]); // original command (not used by createShape directly)
+
+        // args[1] is colors, skip it; positionalArgs[1] needs to be a placeholder for block
+        positionalArgs.add("stone"); // placeholder block (not used for gradient but createShape needs it at index 1)
+
+        for (int i = 2; i < args.length; i++) {
+            String a = args[i];
+            if (a.equalsIgnoreCase("-dir") && i + 1 < args.length) {
+                direction = args[++i].toLowerCase();
+                if (!direction.matches("y|x|z|radial")) {
+                    msg.sendError(player, "Invalid direction! Use: y, x, z, or radial");
+                    return;
+                }
+            } else if (a.equalsIgnoreCase("-interp") && i + 1 < args.length) {
+                interpolation = args[++i].toLowerCase();
+                if (!interpolation.matches("oklab|lab|rgb|hsl")) {
+                    msg.sendError(player, "Invalid interpolation! Use: oklab, lab, rgb, or hsl");
+                    return;
+                }
+            } else if (a.equalsIgnoreCase("-unique")) {
+                uniqueOnly = true;
+            } else {
+                positionalArgs.add(a);
+            }
+        }
+
+        String[] rebuiltArgs = positionalArgs.toArray(new String[0]);
+
+        // Create shape using existing createShape
+        Shape shape = createShape(player, baseCmd, rebuiltArgs);
+        if (shape == null) {
+            return;
+        }
+
+        if (!player.hasPermission(shape.getPermission())) {
+            msg.sendError(player, "You don't have permission to create " + shape.getName() + "s!");
+            return;
+        }
+
+        // Generate locations
+        Location center = player.getLocation();
+        List<Location> blocks = shape.generate(center);
+
+        if (blocks.isEmpty()) {
+            msg.sendError(player, "No blocks to place!");
+            return;
+        }
+
+        int maxBlocks = config.getMaxBlocks();
+        if (maxBlocks > 0 && blocks.size() > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
+            msg.sendError(player, "Operation would place " + blocks.size() + " blocks (max: " + maxBlocks + ")");
+            return;
+        }
+
+        // For 2D shapes with -dir y, auto-fallback to radial
+        if (direction.equals("y") && gradientApplier.is2DShape(blocks)) {
+            direction = "radial";
+        }
+
+        // Count distinct axis values for numSteps
+        int distinctValues = gradientApplier.countDistinctAxisValues(blocks, center, direction);
+        int numSteps = Math.max(2, Math.min(distinctValues, 50));
+
+        // Generate gradient
+        List<GradientEngine.GradientBlock> gradientSteps =
+            gradientEngine.generateGradient(hexColors, numSteps, interpolation, uniqueOnly);
+
+        if (gradientSteps.isEmpty()) {
+            msg.sendError(player, "Failed to generate gradient!");
+            return;
+        }
+
+        // Apply gradient to positions
+        Map<Location, BlockData> blockMap =
+            gradientApplier.applyGradient(blocks, center, gradientSteps, direction);
+
+        // Count unique block types
+        long uniqueBlockCount = blockMap.values().stream()
+            .map(bd -> bd.getMaterial().name())
+            .distinct()
+            .count();
+
+        msg.sendInfo(player, "Gradient " + shape.getName() + ": " + numSteps + " steps, "
+            + uniqueBlockCount + " block types, " + blocks.size() + " total blocks");
+
+        getBlockPlacer().placeGradientBlocks(player, blockMap, "Gradient " + shape.getName());
+    }
+
+    /**
+     * Handles tree generation command.
+     * Format: /mct tree <woodType> seed:<int> th:<int> tr:<int> bd:<float> fd:<float> fr:<int> [-roots] [-special]
+     */
+    private void handleTreeCommand(Player player, String[] args) {
+        MessageUtil msg = plugin.getMessageUtil();
+        ConfigManager config = plugin.getConfigManager();
+
+        if (args.length < 2) {
+            msg.sendUsage(player, "/mct tree <woodType> seed:<seed> th:<trunkHeight> tr:<trunkRadius> bd:<branchDensity> fd:<foliageDensity> fr:<foliageRadius> [-roots] [-special]");
+            msg.sendInfo(player, "Wood types: oak, spruce, birch, jungle, acacia, dark_oak, mangrove, cherry, crimson, warped");
+            return;
+        }
+
+        // Parse wood type (positional, always first)
+        TreeGenerator.WoodType woodType;
+        try {
+            woodType = TreeGenerator.WoodType.valueOf(args[1].toUpperCase());
+        } catch (IllegalArgumentException e) {
+            msg.sendError(player, "Invalid wood type: " + args[1]);
+            msg.sendInfo(player, "Valid: oak, spruce, birch, jungle, acacia, dark_oak, mangrove, cherry, crimson, warped");
+            return;
+        }
+
+        // Permission check
+        if (!player.hasPermission("mctools.shapes.tree")) {
+            msg.sendError(player, "You don't have permission to generate trees!");
+            return;
+        }
+
+        // Default values
+        long seed = System.currentTimeMillis();
+        int trunkHeight = 12;
+        int trunkRadius = 2;
+        double branchDensity = 0.7;
+        double foliageDensity = 0.8;
+        int foliageRadius = 6;
+        boolean enableRoots = false;
+        boolean useSpecialBlocks = false;
+
+        // Parse key:value and flag arguments
+        for (int i = 2; i < args.length; i++) {
+            String arg = args[i].toLowerCase();
+            try {
+                if (arg.startsWith("seed:")) {
+                    seed = Long.parseLong(arg.substring(5));
+                } else if (arg.startsWith("th:")) {
+                    trunkHeight = Integer.parseInt(arg.substring(3));
+                    if (trunkHeight < 4 || trunkHeight > config.getMaxHeight()) {
+                        msg.sendError(player, "Trunk height must be 4-" + config.getMaxHeight());
+                        return;
+                    }
+                } else if (arg.startsWith("tr:")) {
+                    trunkRadius = Integer.parseInt(arg.substring(3));
+                    if (trunkRadius < 1 || trunkRadius > 6) {
+                        msg.sendError(player, "Trunk radius must be 1-6");
+                        return;
+                    }
+                } else if (arg.startsWith("bd:")) {
+                    branchDensity = Double.parseDouble(arg.substring(3));
+                    if (branchDensity < 0.1 || branchDensity > 1.0) {
+                        msg.sendError(player, "Branch density must be 0.1-1.0");
+                        return;
+                    }
+                } else if (arg.startsWith("fd:")) {
+                    foliageDensity = Double.parseDouble(arg.substring(3));
+                    if (foliageDensity < 0.1 || foliageDensity > 1.0) {
+                        msg.sendError(player, "Foliage density must be 0.1-1.0");
+                        return;
+                    }
+                } else if (arg.startsWith("fr:")) {
+                    foliageRadius = Integer.parseInt(arg.substring(3));
+                    if (foliageRadius < 2 || foliageRadius > 15) {
+                        msg.sendError(player, "Foliage radius must be 2-15");
+                        return;
+                    }
+                } else if (arg.equals("-roots")) {
+                    enableRoots = true;
+                } else if (arg.equals("-special")) {
+                    useSpecialBlocks = true;
+                } else {
+                    msg.sendError(player, "Unknown option: " + arg);
+                    msg.sendInfo(player, "Use: seed: th: tr: bd: fd: fr: -roots -special");
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                msg.sendError(player, "Invalid value in: " + arg);
+                return;
+            }
+        }
+
+        TreeGenerator generator = new TreeGenerator(
+            seed, trunkHeight, trunkRadius,
+            branchDensity, foliageDensity, foliageRadius,
+            enableRoots, useSpecialBlocks, woodType
+        );
+
+        // Check block limit
+        int estimated = generator.getEstimatedBlockCount();
+        int maxBlocks = config.getMaxBlocks();
+        if (maxBlocks > 0 && estimated > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
+            msg.sendError(player, "Tree would place ~" + estimated + " blocks (max: " + maxBlocks + ")");
+            return;
+        }
+
+        Location center = player.getLocation();
+        Map<Location, BlockData> blocks = generator.generate(center);
+
+        if (blocks.isEmpty()) {
+            msg.sendError(player, "No blocks generated!");
+            return;
+        }
+
+        // Final block count check
+        if (maxBlocks > 0 && blocks.size() > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
+            msg.sendError(player, "Tree would place " + blocks.size() + " blocks (max: " + maxBlocks + ")");
+            return;
+        }
+
+        msg.sendInfo(player, "Generating " + woodType.name().toLowerCase() + " tree with " + blocks.size() + " blocks (seed: " + seed + ")");
+        getBlockPlacer().placeGradientBlocks(player, blocks, generator.getName());
     }
 
     /**
@@ -535,6 +823,56 @@ public class MCToolsCommand implements CommandExecutor {
                     yield new Torus(majorR, minorR, true, thickness);
                 }
 
+                // Ellipsoid
+                case "ellipsoid" -> {
+                    requireArgs(args, 5, "/mct ellipsoid <block> <radiusX> <radiusY> <radiusZ>");
+                    int rx = parseRadius(args[2], config);
+                    int ry = parseRadius(args[3], config);
+                    int rz = parseRadius(args[4], config);
+                    yield new Ellipsoid(rx, ry, rz);
+                }
+                case "hellipsoid" -> {
+                    requireArgs(args, 6, "/mct hellipsoid <block> <radiusX> <radiusY> <radiusZ> <thickness>");
+                    int rx = parseRadius(args[2], config);
+                    int ry = parseRadius(args[3], config);
+                    int rz = parseRadius(args[4], config);
+                    int thickness = parseInt(args[5], "thickness");
+                    yield new Ellipsoid(rx, ry, rz, true, thickness);
+                }
+
+                // Tube
+                case "tube" -> {
+                    requireArgs(args, 5, "/mct tube <block> <height> <radius> <innerRadius>");
+                    int height = parseHeight(args[2], config);
+                    int radius = parseRadius(args[3], config);
+                    int innerRadius = parseRadius(args[4], config);
+                    if (innerRadius >= radius) {
+                        throw new IllegalArgumentException("Inner radius must be less than outer radius!");
+                    }
+                    yield new Tube(height, radius, innerRadius);
+                }
+
+                // Capsule
+                case "capsule" -> {
+                    requireArgs(args, 4, "/mct capsule <block> <radius> <height>");
+                    int radius = parseRadius(args[2], config);
+                    int height = parseHeight(args[3], config);
+                    if (height < 2 * radius) {
+                        throw new IllegalArgumentException("Height must be at least 2x radius for a capsule!");
+                    }
+                    yield new Capsule(radius, height);
+                }
+                case "hcapsule" -> {
+                    requireArgs(args, 5, "/mct hcapsule <block> <radius> <height> <thickness>");
+                    int radius = parseRadius(args[2], config);
+                    int height = parseHeight(args[3], config);
+                    int thickness = parseInt(args[4], "thickness");
+                    if (height < 2 * radius) {
+                        throw new IllegalArgumentException("Height must be at least 2x radius for a capsule!");
+                    }
+                    yield new Capsule(radius, height, true, thickness);
+                }
+
                 default -> {
                     msg.sendError(player, "Unknown shape: " + cmd);
                     msg.sendInfo(player, "Use /mct help for a list of shapes.");
@@ -740,9 +1078,40 @@ public class MCToolsCommand implements CommandExecutor {
                 " <dark_gray>-</dark_gray> <gray>Wall</gray>"));
         
         // Helix
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hel", "<block>", "<height>", "<radius>", "<turns>", "<thickness>") + 
+        player.sendMessage(msg.parse(msg.buildSyntax("mct hel", "<block>", "<height>", "<radius>", "<turns>", "<thickness>") +
                 " <dark_gray>-</dark_gray> <gray>Helix (3D spiral)</gray>"));
-        
+
+        // Ellipsoid
+        player.sendMessage(msg.parse(msg.buildSyntax("mct ellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>") +
+                " <dark_gray>-</dark_gray> <gray>Ellipsoid</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct hellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>", "<thickness>") +
+                " <dark_gray>-</dark_gray> <gray>Hollow ellipsoid</gray>"));
+
+        // Tube
+        player.sendMessage(msg.parse(msg.buildSyntax("mct tube", "<block>", "<height>", "<radius>", "<innerRadius>") +
+                " <dark_gray>-</dark_gray> <gray>Tube (pipe)</gray>"));
+
+        // Capsule
+        player.sendMessage(msg.parse(msg.buildSyntax("mct capsule", "<block>", "<radius>", "<height>") +
+                " <dark_gray>-</dark_gray> <gray>Capsule (pill)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct hcapsule", "<block>", "<radius>", "<height>", "<thickness>") +
+                " <dark_gray>-</dark_gray> <gray>Hollow capsule</gray>"));
+
+        // Procedural Generation
+        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Procedural Generation:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct tree", "<woodType>", "[seed:] [th:] [tr:] [bd:] [fd:] [fr:]") +
+                " <dark_gray>-</dark_gray> <gray>Procedural tree</gray>"));
+        player.sendMessage(msg.parse("<gray>  Flags: seed: th: tr: bd: fd: fr: -roots -special</gray>"));
+
+        // Gradient Shapes
+        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Gradient Shapes:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
+        player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + ">/mct g&lt;shape&gt;</" + MessageUtil.CMD_COLOR + "> "
+            + "<" + MessageUtil.BLOCK_COLOR + ">&lt;#hex,#hex,...&gt;</" + MessageUtil.BLOCK_COLOR + "> "
+            + "<" + MessageUtil.RADIUS_COLOR + ">&lt;params&gt;</" + MessageUtil.RADIUS_COLOR + "> "
+            + "<" + MessageUtil.OPTIONAL_COLOR + ">[-dir y|x|z|radial] [-interp oklab|lab|rgb|hsl] [-unique]</" + MessageUtil.OPTIONAL_COLOR + ">"));
+        player.sendMessage(msg.parse("<dark_gray>  Example: /mct gsph #ff0000,#0000ff 12</dark_gray>"));
+        player.sendMessage(msg.parse("<gray>  Creates shapes with color gradients using auto-matched blocks</gray>"));
+
         // Admin Commands
         player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Admin Commands:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
         player.sendMessage(msg.parse(msg.buildSyntax("mct undo", "[count]") + " <dark_gray>-</dark_gray> <gray>Undo operations (up to 1000)</gray>"));
@@ -817,6 +1186,44 @@ public class MCToolsCommand implements CommandExecutor {
                 player.sendMessage(msg.parse(msg.buildSyntax("mct hel", "<block>", "<height>", "<radius>", "<turns>", "<thickness>")));
                 player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct hel gold_block 50 10 5 2</dark_gray>"));
             }
+            case "tree" -> {
+                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Procedural Tree</bold></" + MessageUtil.CMD_COLOR + ">"));
+                player.sendMessage(msg.parse("<gray>Generates a procedural tree with trunk, branches, foliage, and optional roots.</gray><newline>"));
+                player.sendMessage(msg.parse(msg.buildSyntax("mct tree", "<woodType>", "[params...]")));
+                player.sendMessage(msg.parse("<newline><gray>Wood types: oak, spruce, birch, jungle, acacia, dark_oak, mangrove, cherry, crimson, warped</gray>"));
+                player.sendMessage(msg.parse("<newline><gray>Parameters (key:value):</gray>"));
+                player.sendMessage(msg.parse("<gray>  seed:<1-99999> random seed (default: random)</gray>"));
+                player.sendMessage(msg.parse("<gray>  th:<4-40> trunk height (default: 12)</gray>"));
+                player.sendMessage(msg.parse("<gray>  tr:<1-6> trunk radius (default: 2)</gray>"));
+                player.sendMessage(msg.parse("<gray>  bd:<0.1-1.0> branch density (default: 0.7)</gray>"));
+                player.sendMessage(msg.parse("<gray>  fd:<0.1-1.0> foliage density (default: 0.8)</gray>"));
+                player.sendMessage(msg.parse("<gray>  fr:<2-15> foliage radius (default: 6)</gray>"));
+                player.sendMessage(msg.parse("<gray>  -roots enable root generation</gray>"));
+                player.sendMessage(msg.parse("<gray>  -special use fences for thin branches, slabs for root tips</gray>"));
+                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct tree oak seed:12345 th:15 bd:0.8 fd:0.9 fr:8 -roots</dark_gray>"));
+            }
+            case "ellipsoid", "hellipsoid" -> {
+                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Ellipsoid</bold></" + MessageUtil.CMD_COLOR + ">"));
+                player.sendMessage(msg.parse("<gray>Creates an ellipsoid with independent radii per axis.</gray><newline>"));
+                player.sendMessage(msg.parse(msg.buildSyntax("mct ellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>")));
+                player.sendMessage(msg.parse(msg.buildSyntax("mct hellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>", "<thickness>")));
+                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct ellipsoid stone 10 15 10</dark_gray>"));
+            }
+            case "tube" -> {
+                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Tube</bold></" + MessageUtil.CMD_COLOR + ">"));
+                player.sendMessage(msg.parse("<gray>Creates a tube (pipe) with inner and outer radius.</gray><newline>"));
+                player.sendMessage(msg.parse(msg.buildSyntax("mct tube", "<block>", "<height>", "<radius>", "<innerRadius>")));
+                player.sendMessage(msg.parse("<newline><gray>innerRadius must be less than radius</gray>"));
+                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct tube stone_bricks 20 10 7</dark_gray>"));
+            }
+            case "capsule", "hcapsule" -> {
+                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Capsule</bold></" + MessageUtil.CMD_COLOR + ">"));
+                player.sendMessage(msg.parse("<gray>Creates a capsule (pill shape) with hemispherical caps.</gray><newline>"));
+                player.sendMessage(msg.parse(msg.buildSyntax("mct capsule", "<block>", "<radius>", "<height>")));
+                player.sendMessage(msg.parse(msg.buildSyntax("mct hcapsule", "<block>", "<radius>", "<height>", "<thickness>")));
+                player.sendMessage(msg.parse("<newline><gray>height must be at least 2x radius</gray>"));
+                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct capsule white_concrete 5 20</dark_gray>"));
+            }
             default -> {
                 msg.sendError(player, "Unknown shape: " + shape);
                 msg.sendInfo(player, "Use /mct help for a list of shapes.");
@@ -832,11 +1239,11 @@ public class MCToolsCommand implements CommandExecutor {
         String version = plugin.getDescription().getVersion();
         
         // Header with gradient
-        player.sendMessage(msg.parse("<newline><gradient:#10b981:#059669><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient>"));
+        player.sendMessage(msg.parse("<newline><gradient:#00d4ff:#0099cc><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient>"));
         player.sendMessage(msg.parse(""));
         
         // Logo/Title
-        player.sendMessage(msg.parse("        <gradient:#10b981:#3b82f6><bold>⬡ MCTools ⬡</bold></gradient>"));
+        player.sendMessage(msg.parse("        <gradient:#00d4ff:#3b82f6><bold>⬡ MCTools ⬡</bold></gradient>"));
         player.sendMessage(msg.parse("        <gray>Advanced Shape Generation</gray>"));
         player.sendMessage(msg.parse(""));
         
@@ -844,28 +1251,25 @@ public class MCToolsCommand implements CommandExecutor {
         player.sendMessage(msg.parse("  <" + MessageUtil.CMD_COLOR + ">▸</" + MessageUtil.CMD_COLOR + "> <gray>Version:</gray> <white>" + version + "</white>"));
         
         // Creator
-        player.sendMessage(msg.parse("  <" + MessageUtil.BLOCK_COLOR + ">▸</" + MessageUtil.BLOCK_COLOR + "> <gray>Created by:</gray> <gradient:#f97316:#ef4444><bold>PenguinStudios Development</bold></gradient>"));
+        player.sendMessage(msg.parse("  <" + MessageUtil.BLOCK_COLOR + ">▸</" + MessageUtil.BLOCK_COLOR + "> <gray>Created by:</gray> <click:open_url:'https://penguinstudios.eu/'><hover:show_text:'<gray>Visit PenguinStudios!</gray>'><gradient:#00d4ff:#5bcefa><bold>PenguinStudios</bold></gradient></hover></click>"));
         
         // Website
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("  <" + MessageUtil.HEIGHT_COLOR + ">▸</" + MessageUtil.HEIGHT_COLOR + "> <gray>Website:</gray> <click:open_url:'https://mcutils.net'><hover:show_text:'<gray>Click to visit!</gray>'><#3b82f6><underlined>mcutils.net</underlined></#3b82f6></hover></click>"));
+        player.sendMessage(msg.parse("  <" + MessageUtil.HEIGHT_COLOR + ">▸</" + MessageUtil.HEIGHT_COLOR + "> <gray>Website:</gray> <click:open_url:'https://mcutils.net/'><hover:show_text:'<gray>Click to visit!</gray>'><#3b82f6><underlined>mcutils.net</underlined></#3b82f6></hover></click>"));
         
-        // Wiki
-        player.sendMessage(msg.parse("  <" + MessageUtil.THICK_COLOR + ">▸</" + MessageUtil.THICK_COLOR + "> <gray>Wiki:</gray> <click:open_url:'https://docs.mcutils.net'><hover:show_text:'<gray>Click to visit!</gray>'><#a855f7><underlined>docs.mcutils.net</underlined></#a855f7></hover></click>"));
-        
-        // GitHub
-        player.sendMessage(msg.parse("  <" + MessageUtil.RADIUS_COLOR + ">▸</" + MessageUtil.RADIUS_COLOR + "> <gray>GitHub:</gray> <click:open_url:'https://github.com/PenguinStudios/MCTools'><hover:show_text:'<gray>Click to visit!</gray>'><#ef4444><underlined>github.com/PenguinStudios/MCTools</underlined></#ef4444></hover></click>"));
+        // GitHub/Download
+        player.sendMessage(msg.parse("  <" + MessageUtil.RADIUS_COLOR + ">▸</" + MessageUtil.RADIUS_COLOR + "> <gray>Download:</gray> <click:open_url:'https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release'><hover:show_text:'<gray>Click to download!</gray>'><#00d4ff><underlined>GitHub Releases</underlined></#00d4ff></hover></click>"));
         
         // Spacer
         player.sendMessage(msg.parse(""));
         
         // Thank you message
-        player.sendMessage(msg.parse("  <gradient:#10b981:#059669>♥</gradient> <gray>Thank you for using</gray> <gradient:#10b981:#3b82f6><bold>MCTools</bold></gradient><gray>!</gray>"));
+        player.sendMessage(msg.parse("  <gradient:#00d4ff:#5bcefa>♥</gradient> <gray>Thank you for using</gray> <gradient:#00d4ff:#3b82f6><bold>MCTools</bold></gradient><gray>!</gray>"));
         player.sendMessage(msg.parse("    <dark_gray>Your support helps us create better tools</dark_gray>"));
         player.sendMessage(msg.parse("    <dark_gray>for the Minecraft building community.</dark_gray>"));
         
         // Footer
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("<gradient:#10b981:#059669><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient><newline>"));
+        player.sendMessage(msg.parse("<gradient:#00d4ff:#0099cc><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient><newline>"));
     }
 }

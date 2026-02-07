@@ -14,15 +14,23 @@ import org.bukkit.scheduler.BukkitTask;
 import java.awt.image.BufferedImage;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Terrain brush with heightmap support.
- * Supports raise, lower, smooth, and flatten modes.
- * Preview functionality with adaptive performance-based block placement.
- * 
- * @author MCTools Team
- * @version 9.0.0
+ * Terrain editing brush based on a grayscale heightmap.
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>Compute terrain changes (raise/lower/smooth/flatten) around a target location.</li>
+ *   <li>Optionally show a temporary in-world preview and auto-convert it after a timeout.</li>
+ *   <li>Integrate with undo so every operation can be reverted safely.</li>
+ * </ul>
+ *
+ * <p>Implementation notes:
+ * <ul>
+ *   <li>Uses a small surface-height cache to reduce repeated scans.</li>
+ *   <li>Applies edge falloff to avoid harsh cut-offs on chunk/void borders.</li>
+ *   <li>Preview state is tracked per-player and automatically cleaned up.</li>
+ * </ul>
  */
 public class TerrainBrush {
 
@@ -32,12 +40,14 @@ public class TerrainBrush {
     private final Map<Long, Integer> surfaceHeightCache = new ConcurrentHashMap<>();
     private static final int CACHE_MAX_SIZE = 10000;
     private static final int EDGE_BLEND_RADIUS = 3;
+    private static final double MOUNTAIN_EDGE_MARGIN = 0.15;
+    private static final int TERRAIN_EDGE_FALLOFF_RADIUS = 5; // Blocks to check for terrain edge falloff
     
-    // Preview system
+    // Preview system (temporary blocks placed to show the result before committing).
     private static final Material PREVIEW_BLOCK = Material.LIME_STAINED_GLASS;
     private static final int PREVIEW_TIMEOUT_SECONDS = 5;
-    
-    // Per-player preview state
+
+    // Per-player preview state.
     private final Map<UUID, PreviewState> playerPreviews = new ConcurrentHashMap<>();
 
     public TerrainBrush(MCTools plugin, BrushManager brushManager) {
@@ -46,7 +56,15 @@ public class TerrainBrush {
     }
 
     /**
-     * Applies the terrain brush at target location.
+     * Entry point for the brush.
+     *
+     * <p>Flow:
+     * <ol>
+     *   <li>Validate settings (enabled + heightmap).</li>
+     *   <li>Run a safety check against server performance.</li>
+     *   <li>Compute a list of block changes (no world edits yet).</li>
+     *   <li>Apply changes immediately or show a preview.</li>
+     * </ol>
      */
     public void apply(Player player, Location targetLocation) {
         BrushSettings settings = brushManager.getSettings(player.getUniqueId());
@@ -57,6 +75,13 @@ public class TerrainBrush {
 
         if (!settings.hasHeightmap()) {
             plugin.getMessageUtil().sendError(player, "No heightmap selected!");
+            return;
+        }
+        
+        // Check server performance before starting
+        String safetyCheck = plugin.getPerformanceMonitor().checkOperationSafety(settings.getSize() * settings.getSize() * settings.getMaxHeight());
+        if (safetyCheck != null) {
+            plugin.getMessageUtil().sendError(player, safetyCheck);
             return;
         }
 
@@ -76,40 +101,74 @@ public class TerrainBrush {
         World world = targetLocation.getWorld();
         if (world == null) return;
         
-        // Check if preview is enabled
+        // Decide between preview mode and direct placement.
         if (settings.isPreviewEnabled()) {
-            addToPreview(player, world, changes, settings.getBlock());
+            showPreview(player, world, changes, settings.getBlock());
         } else {
-            // Apply immediately without preview
             applyChangesDirectly(player, world, changes, settings.getBlock());
         }
     }
     
     /**
-     * Adds blocks to the preview queue and resets the timer.
-     * Uses adaptive performance-based placement.
+     * Shows preview by placing all blocks instantly.
+     * Accumulates multiple brush strokes into the same preview.
      */
-    private void addToPreview(Player player, World world, List<BlockChange> changes, Material finalBlock) {
+    private void showPreview(Player player, World world, List<BlockChange> changes, Material finalBlock) {
         UUID playerId = player.getUniqueId();
         
-        // Get or create preview state
-        PreviewState state = playerPreviews.computeIfAbsent(playerId, 
-            k -> new PreviewState(player, world, finalBlock));
+        // Get existing preview or create new one
+        PreviewState state = playerPreviews.get(playerId);
+        boolean isNewPreview = (state == null);
         
-        // Update the final block (in case player changed it)
-        state.setFinalBlock(finalBlock);
+        if (isNewPreview) {
+            state = new PreviewState(player, world, finalBlock);
+            playerPreviews.put(playerId, state);
+        } else {
+            // Update final block in case it changed
+            state.setFinalBlock(finalBlock);
+        }
         
-        // Queue the changes for adaptive placement
-        state.queueChanges(changes);
+        // Place ALL new preview blocks instantly
+        BlockData previewData = PREVIEW_BLOCK.createBlockData();
+        int placed = 0;
         
-        // Start or continue the placement task
-        state.startPlacementTask();
+        for (BlockChange change : changes) {
+            Location loc = new Location(world, change.x, change.y, change.z);
+            Block block = loc.getBlock();
+            Material existing = block.getType();
+            
+            // Skip if already tracked in this preview
+            if (state.previewLocations.containsKey(loc)) continue;
+            
+            boolean shouldChange = change.requiresSolid 
+                ? !existing.isAir() && !block.isLiquid() && existing != PREVIEW_BLOCK
+                : existing.isAir() || existing == PREVIEW_BLOCK || block.isLiquid();
+            
+            if (shouldChange) {
+                // Save original only if not already tracked
+                state.originalBlocks.putIfAbsent(loc.clone(), block.getBlockData().clone());
+                
+                if (change.requiresSolid) {
+                    block.setType(Material.AIR, false);
+                    state.previewLocations.put(loc.clone(), true);
+                } else {
+                    block.setBlockData(previewData, false);
+                    state.previewLocations.put(loc.clone(), false);
+                }
+                placed++;
+            }
+        }
         
-        // Reset the conversion timer
-        state.resetConversionTimer();
+        state.totalPlaced += placed;
         
-        plugin.getMessageUtil().sendInfo(player, "§aQueued: §f" + changes.size() + " §7blocks. " + 
-            plugin.getPerformanceMonitor().getPerformanceStatus());
+        // Reset conversion timer (extends the timeout with each new stroke)
+        state.startConversionTimer();
+        
+        plugin.getMessageUtil().sendInfo(
+                player,
+                "Preview: +" + placed + " (total: " + state.totalPlaced + "). Auto-convert in " + PREVIEW_TIMEOUT_SECONDS + "s..."
+        );
+        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.5f, 1.5f);
     }
     
     /**
@@ -121,7 +180,7 @@ public class TerrainBrush {
         
         if (changed > 0) {
             plugin.getUndoManager().saveOperation(player, originalBlocks);
-            plugin.getMessageUtil().sendInfo(player, "§aTerrain modified: §f" + changed + " §7blocks changed.");
+            plugin.getMessageUtil().sendInfo(player, "Terrain modified: " + changed + " blocks changed.");
         }
     }
     
@@ -136,7 +195,7 @@ public class TerrainBrush {
     }
     
     /**
-     * Pauses the preview placement for the player.
+     * Pauses the preview for the player (delays auto-conversion).
      */
     public boolean pausePreview(Player player) {
         PreviewState state = playerPreviews.get(player.getUniqueId());
@@ -148,12 +207,13 @@ public class TerrainBrush {
     }
     
     /**
-     * Resumes the preview placement for the player.
+     * Resumes the preview for the player.
      */
     public boolean resumePreview(Player player) {
         PreviewState state = playerPreviews.get(player.getUniqueId());
         if (state != null && state.isPaused()) {
             state.setPaused(false);
+            state.startConversionTimer();
             return true;
         }
         return false;
@@ -167,21 +227,18 @@ public class TerrainBrush {
     }
     
     /**
-     * Preview state for a player - accumulates preview blocks with adaptive placement.
+     * Preview state for a player - stores preview blocks for instant placement.
      */
     private class PreviewState {
         private final Player player;
         private final World world;
         private Material finalBlock;
-        private final Map<Location, BlockData> originalBlocks = new ConcurrentHashMap<>();
-        private final Map<Location, Boolean> previewLocations = new ConcurrentHashMap<>();
-        private final Queue<BlockChange> pendingChanges = new ConcurrentLinkedQueue<>();
-        private BukkitTask placementTask;
+        private final Map<Location, BlockData> originalBlocks = new LinkedHashMap<>();
+        private final Map<Location, Boolean> previewLocations = new LinkedHashMap<>();
         private BukkitTask conversionTask;
         private boolean converted = false;
         private boolean paused = false;
         private int totalPlaced = 0;
-        private long lastSpeedLog = 0;
 
         public PreviewState(Player player, World world, Material finalBlock) {
             this.player = player;
@@ -194,119 +251,25 @@ public class TerrainBrush {
         }
         
         public boolean isPaused() { return paused; }
-        public void setPaused(boolean paused) { this.paused = paused; }
-        
-        public void queueChanges(List<BlockChange> changes) {
-            pendingChanges.addAll(changes);
-        }
-        
-        public void startPlacementTask() {
-            if (placementTask != null && !placementTask.isCancelled()) {
-                return; // Already running
+        public void setPaused(boolean paused) { 
+            this.paused = paused;
+            if (paused && conversionTask != null) {
+                conversionTask.cancel();
+                conversionTask = null;
             }
-            
-            placementTask = new BukkitRunnable() {
-                @Override
-                public void run() {
-                    if (converted || !player.isOnline()) {
-                        cancel();
-                        return;
-                    }
-                    
-                    // Skip if paused
-                    if (paused) return;
-                    
-                    if (pendingChanges.isEmpty()) {
-                        cancel();
-                        placementTask = null;
-                        return;
-                    }
-                    
-                    // Use performance monitor for adaptive speed
-                    int blocksThisTick = plugin.getPerformanceMonitor().calculateBlocksPerTick();
-                    BlockData previewData = PREVIEW_BLOCK.createBlockData();
-                    int placed = 0;
-                    
-                    while (!pendingChanges.isEmpty() && placed < blocksThisTick) {
-                        BlockChange change = pendingChanges.poll();
-                        if (change == null) break;
-                        
-                        Location loc = new Location(world, change.x, change.y, change.z);
-                        Block block = loc.getBlock();
-                        Material existing = block.getType();
-                        
-                        // Skip if already a preview block at this location
-                        if (previewLocations.containsKey(loc)) continue;
-                        
-                        boolean shouldChange = change.requiresSolid 
-                            ? !existing.isAir() && !block.isLiquid() && existing != PREVIEW_BLOCK
-                            : existing.isAir() || existing == PREVIEW_BLOCK || block.isLiquid();
-                        
-                        if (shouldChange) {
-                            // Save original only if not already tracked
-                            originalBlocks.putIfAbsent(loc.clone(), block.getBlockData().clone());
-                            
-                            if (change.requiresSolid) {
-                                // For LOWER mode - set to air
-                                block.setType(Material.AIR, false);
-                                previewLocations.put(loc.clone(), true);
-                            } else {
-                                block.setBlockData(previewData, false);
-                                previewLocations.put(loc.clone(), false);
-                            }
-                            placed++;
-                            totalPlaced++;
-                        }
-                    }
-                    
-                    // Log speed every 5 seconds
-                    long now = System.currentTimeMillis();
-                    if (placed > 0 && now - lastSpeedLog >= 5000) {
-                        lastSpeedLog = now;
-                        int remaining = pendingChanges.size();
-                        plugin.getMessageUtil().sendInfo(player, 
-                            "§7Speed: " + plugin.getPerformanceMonitor().getPerformanceStatus() + 
-                            " §7| §f" + totalPlaced + " §7done, §f" + remaining + " §7remaining");
-                    }
-                    
-                    // Notify when done
-                    if (pendingChanges.isEmpty() && placed > 0) {
-                        plugin.getMessageUtil().sendInfo(player, 
-                            "§aPreview complete: §f" + totalPlaced + " §7blocks. Auto-convert in §a" + PREVIEW_TIMEOUT_SECONDS + "s§7...");
-                        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.5f, 1.5f);
-                    }
-                }
-            }.runTaskTimer(plugin, 0L, 1L);
         }
         
-        public void resetConversionTimer() {
-            // Cancel existing timer
+        public void startConversionTimer() {
             if (conversionTask != null) {
                 conversionTask.cancel();
             }
             
-            // Start new timer
             conversionTask = new BukkitRunnable() {
                 @Override
                 public void run() {
-                    if (!player.isOnline() || converted) {
-                        cancel();
+                    if (!player.isOnline() || converted || paused) {
                         return;
                     }
-                    
-                    // Don't convert if paused
-                    if (paused) {
-                        resetConversionTimer();
-                        return;
-                    }
-                    
-                    // Wait for placement to finish
-                    if (!pendingChanges.isEmpty()) {
-                        // Reschedule
-                        resetConversionTimer();
-                        return;
-                    }
-                    
                     convertToFinal();
                 }
             }.runTaskLater(plugin, PREVIEW_TIMEOUT_SECONDS * 20L);
@@ -316,56 +279,42 @@ public class TerrainBrush {
             if (converted) return;
             converted = true;
             
-            // Stop placement task
-            if (placementTask != null) {
-                placementTask.cancel();
+            if (conversionTask != null) {
+                conversionTask.cancel();
             }
             
             playerPreviews.remove(player.getUniqueId());
             
             player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.2f);
             
-            // Convert preview blocks to final - also adaptive
+            // Convert preview blocks to final
             BlockData finalData = finalBlock.createBlockData();
             int convertedCount = 0;
             
-            // For large previews, convert in batches
-            List<Location> toConvert = new ArrayList<>();
             for (Map.Entry<Location, Boolean> entry : previewLocations.entrySet()) {
                 if (!entry.getValue()) { // Not air (LOWER mode)
-                    toConvert.add(entry.getKey());
+                    Block block = entry.getKey().getBlock();
+                    if (block.getType() == PREVIEW_BLOCK) {
+                        block.setBlockData(finalData, false);
+                        convertedCount++;
+                    }
                 } else {
                     convertedCount++; // Air blocks already done
                 }
             }
             
-            // Convert all at once (they're already placed, just changing material)
-            for (Location loc : toConvert) {
-                Block block = loc.getBlock();
-                if (block.getType() == PREVIEW_BLOCK) {
-                    block.setBlockData(finalData, false);
-                    convertedCount++;
-                }
-            }
-            
             // Save for undo
             plugin.getUndoManager().saveOperation(player, new LinkedHashMap<>(originalBlocks));
-            plugin.getMessageUtil().sendInfo(player, "§aTerrain generated: §f" + convertedCount + " §7blocks placed.");
+            plugin.getMessageUtil().sendInfo(player, "Terrain generated: " + convertedCount + " blocks placed.");
         }
         
         public void cancel() {
             if (converted) return;
             converted = true;
             
-            if (placementTask != null) {
-                placementTask.cancel();
-            }
             if (conversionTask != null) {
                 conversionTask.cancel();
             }
-            
-            // Clear pending
-            pendingChanges.clear();
             
             // Restore original blocks
             for (Map.Entry<Location, BlockData> entry : originalBlocks.entrySet()) {
@@ -375,12 +324,19 @@ public class TerrainBrush {
                 }
             }
             
-            plugin.getMessageUtil().sendInfo(player, "§cPreview cancelled and restored.");
+            plugin.getMessageUtil().sendInfo(player, "Preview cancelled and terrain restored.");
         }
     }
 
     /**
-     * Calculates all block changes without applying them.
+     * Builds a list of block changes without editing the world.
+     *
+     * <p>This method is intentionally "pure" (calculation only) so we can:
+     * <ul>
+     *   <li>preview changes safely</li>
+     *   <li>measure performance before committing</li>
+     *   <li>apply/undo operations consistently</li>
+     * </ul>
      */
     private List<BlockChange> calculateChanges(Location center, BrushSettings settings, float playerYaw) {
         World world = center.getWorld();
@@ -410,14 +366,70 @@ public class TerrainBrush {
 
         double[][] brushHeights = new double[worldW + 1][worldW + 1];
         int[][] surfaceHeights = new int[worldW + 1][worldW + 1];
+        boolean[][] hasSolidGround = new boolean[worldW + 1][worldW + 1];
         
-        // Calculate heights
+        // First pass: Calculate surface heights and check for solid ground
         for (int wx = 0; wx <= worldW; wx++) {
             for (int wz = 0; wz <= worldW; wz++) {
                 int worldX = centerX - extSize + wx;
                 int worldZ = centerZ - extSize + wz;
                 
                 surfaceHeights[wx][wz] = getCachedSurfaceHeight(world, worldX, centerY, worldZ);
+                
+                // Check if there's solid ground at this position
+                Block surfaceBlock = world.getBlockAt(worldX, surfaceHeights[wx][wz], worldZ);
+                hasSolidGround[wx][wz] = !surfaceBlock.getType().isAir() && !surfaceBlock.isLiquid();
+            }
+        }
+        
+        // Second pass: Calculate edge distance for each position (distance to nearest air/void)
+        double[][] edgeFalloff = new double[worldW + 1][worldW + 1];
+        for (int wx = 0; wx <= worldW; wx++) {
+            for (int wz = 0; wz <= worldW; wz++) {
+                if (!hasSolidGround[wx][wz]) {
+                    edgeFalloff[wx][wz] = 0; // No ground = no generation
+                } else {
+                    // Find minimum distance to edge (position without solid ground)
+                    int minDistToEdge = TERRAIN_EDGE_FALLOFF_RADIUS + 1;
+                    
+                    for (int dx = -TERRAIN_EDGE_FALLOFF_RADIUS; dx <= TERRAIN_EDGE_FALLOFF_RADIUS; dx++) {
+                        for (int dz = -TERRAIN_EDGE_FALLOFF_RADIUS; dz <= TERRAIN_EDGE_FALLOFF_RADIUS; dz++) {
+                            int nx = wx + dx;
+                            int nz = wz + dz;
+                            
+                            // Check bounds
+                            if (nx < 0 || nx > worldW || nz < 0 || nz > worldW) {
+                                // Out of bounds = treat as edge
+                                int dist = Math.max(Math.abs(dx), Math.abs(dz));
+                                minDistToEdge = Math.min(minDistToEdge, dist);
+                            } else if (!hasSolidGround[nx][nz]) {
+                                // Found air/void nearby
+                                int dist = Math.max(Math.abs(dx), Math.abs(dz));
+                                minDistToEdge = Math.min(minDistToEdge, dist);
+                            }
+                        }
+                    }
+                    
+                    // Calculate falloff based on distance to edge
+                    if (minDistToEdge <= TERRAIN_EDGE_FALLOFF_RADIUS) {
+                        // Smooth falloff using hermite interpolation
+                        double t = (double) minDistToEdge / TERRAIN_EDGE_FALLOFF_RADIUS;
+                        edgeFalloff[wx][wz] = t * t * (3 - 2 * t); // Smooth step
+                    } else {
+                        edgeFalloff[wx][wz] = 1.0; // Full height, far from edge
+                    }
+                }
+            }
+        }
+        
+        // Third pass: Calculate brush heights with edge falloff applied
+        for (int wx = 0; wx <= worldW; wx++) {
+            for (int wz = 0; wz <= worldW; wz++) {
+                // Skip if no solid ground
+                if (!hasSolidGround[wx][wz]) {
+                    brushHeights[wx][wz] = 0;
+                    continue;
+                }
                 
                 double normX = (double) (wx - extSize) / size;
                 double normZ = (double) (wz - extSize) / size;
@@ -442,13 +454,22 @@ public class TerrainBrush {
                     heightVal = sampleBilinear(heightmap, imgX, imgZ);
                 }
                 
-                // Falloff
-                if (circular && dist > 0.7) {
-                    double falloff = 1.0 - ((dist - 0.7) / (maxDist - 0.7));
+                // Brush circle falloff
+                double effectiveMaxDist = circular ? (1.0 - MOUNTAIN_EDGE_MARGIN) : (Math.sqrt(2) - MOUNTAIN_EDGE_MARGIN);
+                if (dist > effectiveMaxDist * 0.5) {
+                    double falloffStart = effectiveMaxDist * 0.5;
+                    double falloff = 1.0 - ((dist - falloffStart) / (effectiveMaxDist - falloffStart));
                     falloff = Math.max(0, Math.min(1, falloff));
                     falloff = falloff * falloff * (3 - 2 * falloff);
                     heightVal *= falloff;
                 }
+                
+                if (dist > effectiveMaxDist) {
+                    heightVal = 0;
+                }
+                
+                // Apply terrain edge falloff - this creates the smooth slope at terrain borders
+                heightVal *= edgeFalloff[wx][wz];
                 
                 brushHeights[wx][wz] = heightVal;
             }
@@ -474,7 +495,10 @@ public class TerrainBrush {
                 int worldZ = centerZ - extSize + wz;
                 int surfaceY = surfaceHeights[wx][wz];
 
-                collectChanges(world, worldX, surfaceY, worldZ, targetH, mode, centerY, changes);
+                // Only generate if there's solid ground
+                if (hasSolidGround[wx][wz]) {
+                    collectChanges(world, worldX, surfaceY, worldZ, targetH, mode, centerY, changes);
+                }
             }
         }
 

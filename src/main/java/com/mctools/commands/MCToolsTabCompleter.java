@@ -34,8 +34,24 @@ public class MCToolsTabCompleter implements TabCompleter {
             "hcir", "hsq", "hrect", "hell", "hpoly",
             // 3D Filled
             "sph", "dome", "cyl", "cone", "pyr", "arch", "tor", "wall", "hel",
+            "ellipsoid", "tube", "capsule", "tree",
             // 3D Hollow
-            "hsph", "hdome", "hcyl", "hcone", "hpyr", "harch", "htor"
+            "hsph", "hdome", "hcyl", "hcone", "hpyr", "harch", "htor",
+            "hellipsoid", "hcapsule"
+    );
+
+    // Gradient commands (g-prefix on all shape commands + hollow variants)
+    private static final List<String> GRADIENT_COMMANDS = Arrays.asList(
+            // 2D Filled gradient
+            "gcir", "gsq", "grect", "gell", "gpoly", "gstar", "gline", "gspi",
+            // 2D Hollow gradient
+            "ghcir", "ghsq", "ghrect", "ghell", "ghpoly",
+            // 3D Filled gradient
+            "gsph", "gdome", "gcyl", "gcone", "gpyr", "garch", "gtor", "gwall", "ghel",
+            "gellipsoid", "gtube", "gcapsule",
+            // 3D Hollow gradient
+            "ghsph", "ghdome", "ghcyl", "ghcone", "ghpyr", "gharch", "ghtor",
+            "ghellipsoid", "ghcapsule"
     );
 
     private static final List<String> ADMIN_COMMANDS = Arrays.asList(
@@ -80,31 +96,69 @@ public class MCToolsTabCompleter implements TabCompleter {
         List<String> completions = new ArrayList<>();
 
         if (args.length == 1) {
-            // First argument: shape/admin
+            // First argument: shape/admin/gradient
             String input = args[0].toLowerCase();
 
             completions.addAll(filterStartsWith(SHAPE_COMMANDS, input));
+            completions.addAll(filterStartsWith(GRADIENT_COMMANDS, input));
             completions.addAll(filterStartsWith(ADMIN_COMMANDS, input));
 
         } else if (args.length == 2) {
             String subCmd = args[0].toLowerCase();
             String input = args[1].toLowerCase();
-            
-            if (SHAPE_COMMANDS.contains(subCmd)) {
+
+            if (subCmd.equals("tree")) {
+                // Second argument for tree: wood type
+                completions.addAll(filterStartsWith(Arrays.asList(
+                    "oak", "spruce", "birch", "jungle", "acacia", "dark_oak",
+                    "mangrove", "cherry", "crimson", "warped"
+                ), input));
+            } else if (GRADIENT_COMMANDS.contains(subCmd)) {
+                // Second argument for gradient: hex colors
+                if (input.isEmpty() || input.startsWith("#")) {
+                    completions.addAll(Arrays.asList("#ff0000,#0000ff", "#ff6b6b,#4ecdc4", "#ffffff,#000000",
+                        "#ff0000,#00ff00,#0000ff", "#ff6b6b,#ffd93d,#6bcb77,#4d96ff"));
+                }
+            } else if (SHAPE_COMMANDS.contains(subCmd)) {
                 // Second argument for shapes: block type
                 completions.addAll(getBlockSuggestions(player, input));
             } else if (subCmd.equals("help")) {
-                // Help for specific shape
                 completions.addAll(filterStartsWith(SHAPE_COMMANDS, input));
             } else if (subCmd.equals("undo") || subCmd.equals("redo")) {
-                // Suggest numbers for undo/redo
                 completions.addAll(filterStartsWith(Arrays.asList("1", "5", "10", "25", "50", "100"), input));
             }
-            
+
         } else if (args.length >= 3) {
             String subCmd = args[0].toLowerCase();
-            // Parameter suggestions based on shape
-            completions.addAll(getParameterSuggestions(subCmd, args.length - 2));
+            String lastArg = args[args.length - 1].toLowerCase();
+            String prevArg = args.length >= 2 ? args[args.length - 2].toLowerCase() : "";
+
+            if (subCmd.equals("tree")) {
+                // Tree command: key:value params and flags after wood type
+                completions.addAll(filterStartsWith(Arrays.asList(
+                    "seed:", "th:", "tr:", "bd:", "fd:", "fr:", "-roots", "-special"
+                ), lastArg));
+            } else if (GRADIENT_COMMANDS.contains(subCmd)) {
+                // Gradient command: suggest flags or base shape params
+                if (prevArg.equals("-dir")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("y", "x", "z", "radial"), lastArg));
+                } else if (prevArg.equals("-interp")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("oklab", "lab", "rgb", "hsl"), lastArg));
+                } else if (lastArg.startsWith("-")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("-dir", "-interp", "-unique"), lastArg));
+                } else {
+                    // Suggest shape parameters based on base shape
+                    String baseCmd = subCmd.substring(1); // strip 'g'
+                    // argIndex: args[2] is the first shape param (index 1)
+                    int shapeArgIndex = args.length - 2; // -1 for cmd, -1 for colors
+                    completions.addAll(getParameterSuggestions(baseCmd, shapeArgIndex));
+                    // Also suggest flags
+                    completions.addAll(Arrays.asList("-dir", "-interp", "-unique"));
+                }
+            } else {
+                // Regular shape parameter suggestions
+                completions.addAll(getParameterSuggestions(subCmd, args.length - 2));
+            }
         }
 
         return completions;
@@ -316,6 +370,33 @@ public class MCToolsTabCompleter implements TabCompleter {
                 else if (argIndex == 2) suggestions.addAll(radiusSuggestions);
                 else if (argIndex == 3) suggestions.addAll(turnsSuggestions);
                 else if (argIndex == 4) suggestions.addAll(thicknessSuggestions);
+            }
+
+            // Ellipsoid
+            case "ellipsoid" -> {
+                if (argIndex <= 3) suggestions.addAll(radiusSuggestions);
+            }
+            case "hellipsoid" -> {
+                if (argIndex <= 3) suggestions.addAll(radiusSuggestions);
+                else if (argIndex == 4) suggestions.addAll(thicknessSuggestions);
+            }
+
+            // Tube
+            case "tube" -> {
+                if (argIndex == 1) suggestions.addAll(heightSuggestions);
+                else if (argIndex == 2) suggestions.addAll(radiusSuggestions);
+                else if (argIndex == 3) suggestions.addAll(Arrays.asList("3", "4", "5", "6", "8"));
+            }
+
+            // Capsule
+            case "capsule" -> {
+                if (argIndex == 1) suggestions.addAll(radiusSuggestions);
+                else if (argIndex == 2) suggestions.addAll(heightSuggestions);
+            }
+            case "hcapsule" -> {
+                if (argIndex == 1) suggestions.addAll(radiusSuggestions);
+                else if (argIndex == 2) suggestions.addAll(heightSuggestions);
+                else if (argIndex == 3) suggestions.addAll(thicknessSuggestions);
             }
         }
 

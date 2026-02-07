@@ -23,6 +23,7 @@ permissions:
     children:
       mctools.use: true
       mctools.shapes.*: true
+      mctools.gradient: true
       mctools.admin: true
       mctools.brush: true
   mctools.use:
@@ -49,6 +50,9 @@ permissions:
       mctools.shapes.star: true
       mctools.shapes.line: true
       mctools.shapes.wall: true
+  mctools.gradient:
+    description: Use gradient shape commands
+    default: true
   mctools.admin:
     description: Admin commands (reload, etc)
     default: op

@@ -10,15 +10,21 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Advanced Undo/Redo manager with support for multiple operations.
- * 
- * Features:
- * - Up to 1000 undo operations per player
- * - Undo multiple operations at once
- * - Full redo support
- * 
- * @author MCTools Team
- * @version 2.0.0
+ * Per-player undo/redo history for block operations.
+ *
+ * <p>Responsibilities:
+ * <ul>
+ *   <li>Store original block data before each operation.</li>
+ *   <li>Restore blocks on undo (and save current state for redo).</li>
+ *   <li>Limit history size to avoid memory bloat.</li>
+ * </ul>
+ *
+ * <p>Design notes:
+ * <ul>
+ *   <li>History is stored per-player using {@link ConcurrentHashMap} for thread safety.</li>
+ *   <li>Each operation is a snapshot of {@link Location} → {@link BlockData}.</li>
+ *   <li>Redo is cleared when a new operation is saved (standard undo/redo semantics).</li>
+ * </ul>
  */
 public class UndoManager {
 
