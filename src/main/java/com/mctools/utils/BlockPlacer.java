@@ -47,6 +47,8 @@ public class BlockPlacer {
      * Places blocks with different materials (e.g. trees / multi-block structures).
      *
      * <p>This is a convenience wrapper that converts {@link Material} to {@link BlockData}.</p>
+     * Places blocks with different materials (for trees and other multi-block structures).
+
      */
     public void placeMultiBlocks(Player player, Map<Location, Material> blocks, String shapeName) {
         Map<Location, BlockData> blockDataMap = new LinkedHashMap<>();
@@ -60,6 +62,7 @@ public class BlockPlacer {
      * Places blocks where each position can have a different {@link BlockData}.
      *
      * <p>Used by gradient and procedural generators.</p>
+     * Places gradient blocks (different block type per position) with optional preview.
      */
     public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName) {
         if (blockMap.isEmpty()) {
@@ -195,6 +198,8 @@ public class BlockPlacer {
         // Start message.
         plugin.getMessageUtil().sendInfo(player, "Starting generation...");
         plugin.getMessageUtil().sendInfo(player, "Blocks: " + formatNumber(blocks.size()) + " | " + perfMon.getCompactStatusMiniMessage());
+        plugin.getMessageUtil().sendInfo(player, "<gradient:#10b981:#059669>▶ Starting generation...</gradient>");
+        plugin.getMessageUtil().sendInfo(player, "<dark_gray>┃</dark_gray> <gray>Blocks:</gray> <white>" + formatNumber(blocks.size()) + "</white> <dark_gray>│</dark_gray> " + perfMon.getCompactStatusMiniMessage());
 
         // Create and start the placement task
         PlacementTask task = new PlacementTask(player, blocks, blockData, originalBlocks, shapeName, gradientMap);
