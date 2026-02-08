@@ -1,12 +1,24 @@
 package com.mctools.brush;
 
 import com.mctools.MCTools;
+import com.sk89q.worldedit.EditSession;
+import com.sk89q.worldedit.LocalSession;
+import com.sk89q.worldedit.WorldEdit;
+import com.sk89q.worldedit.WorldEditException;
+import com.sk89q.worldedit.bukkit.BukkitAdapter;
+import com.sk89q.worldedit.bukkit.BukkitPlayer;
+import com.sk89q.worldedit.math.BlockVector3;
+import com.sk89q.worldedit.world.block.BlockState;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
@@ -45,6 +57,7 @@ public class TerrainBrush {
     
     // Preview system (temporary blocks placed to show the result before committing).
     private static final Material PREVIEW_BLOCK = Material.LIME_STAINED_GLASS;
+    private static final Material PREVIEW_REMOVE_BLOCK = Material.RED_STAINED_GLASS; // For blocks to be removed
     private static final int PREVIEW_TIMEOUT_SECONDS = 5;
 
     // Per-player preview state.
@@ -129,7 +142,8 @@ public class TerrainBrush {
         }
         
         // Place ALL new preview blocks instantly
-        BlockData previewData = PREVIEW_BLOCK.createBlockData();
+        BlockData previewAddData = PREVIEW_BLOCK.createBlockData();
+        BlockData previewRemoveData = PREVIEW_REMOVE_BLOCK.createBlockData();
         int placed = 0;
         
         for (BlockChange change : changes) {
@@ -140,20 +154,25 @@ public class TerrainBrush {
             // Skip if already tracked in this preview
             if (state.previewLocations.containsKey(loc)) continue;
             
+            // Skip preview blocks from previous operations
+            if (existing == PREVIEW_BLOCK || existing == PREVIEW_REMOVE_BLOCK) continue;
+            
             boolean shouldChange = change.requiresSolid 
-                ? !existing.isAir() && !block.isLiquid() && existing != PREVIEW_BLOCK
-                : existing.isAir() || existing == PREVIEW_BLOCK || block.isLiquid();
+                ? !existing.isAir() && !block.isLiquid()
+                : existing.isAir() || block.isLiquid();
             
             if (shouldChange) {
                 // Save original only if not already tracked
                 state.originalBlocks.putIfAbsent(loc.clone(), block.getBlockData().clone());
                 
                 if (change.requiresSolid) {
-                    block.setType(Material.AIR, false);
-                    state.previewLocations.put(loc.clone(), true);
+                    // For removal: show red glass preview instead of immediately removing
+                    block.setBlockData(previewRemoveData, false);
+                    state.previewLocations.put(loc.clone(), true); // true = will be removed
                 } else {
-                    block.setBlockData(previewData, false);
-                    state.previewLocations.put(loc.clone(), false);
+                    // For addition: show green glass preview
+                    block.setBlockData(previewAddData, false);
+                    state.previewLocations.put(loc.clone(), false); // false = will be added
                 }
                 placed++;
             }
@@ -173,15 +192,111 @@ public class TerrainBrush {
     
     /**
      * Applies changes directly without preview.
+     * Uses WorldEdit EditSession when available for //undo support.
      */
     private void applyChangesDirectly(Player player, World world, List<BlockChange> changes, Material block) {
         Map<Location, BlockData> originalBlocks = new LinkedHashMap<>();
-        int changed = applyChanges(world, changes, originalBlocks, block);
+        int changed;
+        
+        if (isWorldEditAvailable()) {
+            changed = applyChangesWithWorldEdit(player, world, changes, originalBlocks, block);
+        } else {
+            changed = applyChanges(world, changes, originalBlocks, block);
+        }
         
         if (changed > 0) {
             plugin.getUndoManager().saveOperation(player, originalBlocks);
-            plugin.getMessageUtil().sendInfo(player, "Terrain modified: " + changed + " blocks changed.");
+            plugin.getMessageUtil().sendInfo(player, "Terrain modified: " + changed + " blocks changed. Use //undo to revert.");
         }
+    }
+    
+    /**
+     * Checks if WorldEdit is available on the server.
+     */
+    private boolean isWorldEditAvailable() {
+        return Bukkit.getPluginManager().getPlugin("WorldEdit") != null;
+    }
+    
+    /**
+     * Opens a WorldEdit EditSession for the player.
+     */
+    private EditSession openEditSession(Player player, int expectedChanges) {
+        BukkitPlayer wePlayer = BukkitAdapter.adapt(player);
+        com.sk89q.worldedit.world.World weWorld = BukkitAdapter.adapt(player.getWorld());
+        
+        return WorldEdit.getInstance().newEditSessionBuilder()
+            .world(weWorld)
+            .actor(wePlayer)
+            .maxBlocks(expectedChanges)
+            .build();
+    }
+    
+    /**
+     * Converts Bukkit BlockData to WorldEdit BlockState.
+     */
+    private BlockState toWEBlockState(BlockData data) {
+        return BukkitAdapter.adapt(data);
+    }
+    
+    /**
+     * Applies changes using WorldEdit EditSession for //undo support.
+     */
+    private int applyChangesWithWorldEdit(Player player, World world, List<BlockChange> changes,
+                                          Map<Location, BlockData> originalBlocks, Material block) {
+        int changed = 0;
+        BlockData blockData = block.createBlockData();
+        
+        EditSession editSession = null;
+        try {
+            editSession = openEditSession(player, changes.size());
+            
+            for (BlockChange change : changes) {
+                Location loc = new Location(world, change.x, change.y, change.z);
+                Block blk = loc.getBlock();
+                Material existing = blk.getType();
+                
+                boolean shouldChange = change.requiresSolid 
+                    ? !existing.isAir() && !blk.isLiquid()
+                    : existing.isAir() || blk.isLiquid();
+                
+                if (shouldChange) {
+                    originalBlocks.putIfAbsent(loc.clone(), blk.getBlockData().clone());
+                    
+                    BlockVector3 pt = BlockVector3.at(change.x, change.y, change.z);
+                    BlockState state = change.requiresSolid 
+                        ? BukkitAdapter.adapt(Material.AIR.createBlockData())
+                        : toWEBlockState(blockData);
+                    
+                    editSession.setBlock(pt, state);
+                    changed++;
+                }
+            }
+            
+            // Close and register in history for //undo support
+            editSession.close();
+            
+            BukkitPlayer wePlayer = BukkitAdapter.adapt(player);
+            LocalSession localSession = WorldEdit.getInstance().getSessionManager().get(wePlayer);
+            if (localSession != null) {
+                localSession.remember(editSession);
+            }
+            
+        } catch (WorldEditException e) {
+            plugin.getLogger().warning("WorldEdit error in TerrainBrush: " + e.getMessage());
+            // Fallback to Bukkit if WorldEdit fails
+            if (editSession != null) {
+                try { editSession.close(); } catch (Exception ignored) {}
+            }
+            return applyChanges(world, changes, originalBlocks, block);
+        } catch (Exception e) {
+            plugin.getLogger().warning("Failed to use WorldEdit in TerrainBrush: " + e.getMessage());
+            if (editSession != null) {
+                try { editSession.close(); } catch (Exception ignored) {}
+            }
+            return applyChanges(world, changes, originalBlocks, block);
+        }
+        
+        return changed;
     }
     
     /**
@@ -236,14 +351,18 @@ public class TerrainBrush {
         private final Map<Location, BlockData> originalBlocks = new LinkedHashMap<>();
         private final Map<Location, Boolean> previewLocations = new LinkedHashMap<>();
         private BukkitTask conversionTask;
+        private BukkitTask countdownTask;
+        private BossBar countdownBossBar;
         private boolean converted = false;
         private boolean paused = false;
         private int totalPlaced = 0;
+        private int secondsRemaining = PREVIEW_TIMEOUT_SECONDS;
 
         public PreviewState(Player player, World world, Material finalBlock) {
             this.player = player;
             this.world = world;
             this.finalBlock = finalBlock;
+            createBossbar();
         }
         
         public void setFinalBlock(Material block) {
@@ -253,17 +372,105 @@ public class TerrainBrush {
         public boolean isPaused() { return paused; }
         public void setPaused(boolean paused) { 
             this.paused = paused;
-            if (paused && conversionTask != null) {
-                conversionTask.cancel();
-                conversionTask = null;
+            if (paused) {
+                if (conversionTask != null) {
+                    conversionTask.cancel();
+                    conversionTask = null;
+                }
+                if (countdownTask != null) {
+                    countdownTask.cancel();
+                    countdownTask = null;
+                }
+                updateBossbarPaused();
+            }
+        }
+        
+        private void createBossbar() {
+            if (!plugin.getConfigManager().isEtaBossbarEnabled()) return;
+            countdownBossBar = Bukkit.createBossBar(
+                "§b§l⛰ §fTerrain §7│ §a" + secondsRemaining + "s §7│ §e" + formatNumber(totalPlaced) + " blocks",
+                BarColor.BLUE,
+                BarStyle.SEGMENTED_10
+            );
+            countdownBossBar.setProgress(1.0);
+            countdownBossBar.addPlayer(player);
+            countdownBossBar.setVisible(true);
+        }
+        
+        private String formatNumber(int number) {
+            return String.format("%,d", number);
+        }
+        
+        private void updateBossbar() {
+            if (countdownBossBar == null) return;
+            double progress = Math.max(0.0, (double) secondsRemaining / PREVIEW_TIMEOUT_SECONDS);
+            countdownBossBar.setProgress(progress);
+            
+            // Dynamic icon based on time remaining
+            String icon;
+            if (secondsRemaining <= 2) {
+                icon = "§c§l⚡";
+                countdownBossBar.setColor(BarColor.RED);
+            } else if (secondsRemaining <= 3) {
+                icon = "§6§l⏰";
+                countdownBossBar.setColor(BarColor.YELLOW);
+            } else {
+                icon = "§b§l⛰";
+                countdownBossBar.setColor(BarColor.BLUE);
+            }
+            
+            countdownBossBar.setTitle(icon + " §fTerrain §7│ §a" + secondsRemaining + "s §7│ §e" + formatNumber(totalPlaced) + " blocks");
+        }
+        
+        private void updateBossbarPaused() {
+            if (countdownBossBar == null) return;
+            countdownBossBar.setTitle("§d§l⏸ §fPAUSED §7│ §fTerrain §7│ §e" + formatNumber(totalPlaced) + " blocks");
+            countdownBossBar.setColor(BarColor.PURPLE);
+        }
+        
+        private void removeBossbar() {
+            if (countdownBossBar != null) {
+                countdownBossBar.removeAll();
+                countdownBossBar = null;
             }
         }
         
         public void startConversionTimer() {
+            // Reset countdown
+            secondsRemaining = PREVIEW_TIMEOUT_SECONDS;
+            updateBossbar();
+            
             if (conversionTask != null) {
                 conversionTask.cancel();
             }
+            if (countdownTask != null) {
+                countdownTask.cancel();
+            }
             
+            // Countdown task that updates every second
+            countdownTask = new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (!player.isOnline() || converted || paused) {
+                        cancel();
+                        return;
+                    }
+                    
+                    secondsRemaining--;
+                    updateBossbar();
+                    
+                    if (secondsRemaining <= 3 && secondsRemaining > 0) {
+                        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_HAT, 0.5f, 1.2f);
+                    }
+                    
+                    if (secondsRemaining <= 0) {
+                        cancel();
+                        convertToFinal();
+                    }
+                }
+            }.runTaskTimer(plugin, 20L, 20L);
+            
+            // Backup conversion task (in case countdown fails)
             conversionTask = new BukkitRunnable() {
                 @Override
                 public void run() {
@@ -272,7 +479,7 @@ public class TerrainBrush {
                     }
                     convertToFinal();
                 }
-            }.runTaskLater(plugin, PREVIEW_TIMEOUT_SECONDS * 20L);
+            }.runTaskLater(plugin, (PREVIEW_TIMEOUT_SECONDS + 1) * 20L);
         }
         
         private void convertToFinal() {
@@ -282,30 +489,137 @@ public class TerrainBrush {
             if (conversionTask != null) {
                 conversionTask.cancel();
             }
+            if (countdownTask != null) {
+                countdownTask.cancel();
+            }
+            removeBossbar();
             
             playerPreviews.remove(player.getUniqueId());
             
             player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.2f);
             
-            // Convert preview blocks to final
+            // Convert preview blocks to final using WorldEdit if available
+            int convertedCount;
+            if (isWorldEditAvailable()) {
+                convertedCount = convertToFinalWithWorldEdit();
+            } else {
+                convertedCount = convertToFinalWithBukkit();
+            }
+            
+            // Save for MCTools undo
+            plugin.getUndoManager().saveOperation(player, new LinkedHashMap<>(originalBlocks));
+            plugin.getMessageUtil().sendInfo(player, "Terrain generated: " + convertedCount + " blocks placed. Use //undo to revert.");
+        }
+        
+        private int convertToFinalWithBukkit() {
             BlockData finalData = finalBlock.createBlockData();
             int convertedCount = 0;
             
             for (Map.Entry<Location, Boolean> entry : previewLocations.entrySet()) {
-                if (!entry.getValue()) { // Not air (LOWER mode)
-                    Block block = entry.getKey().getBlock();
-                    if (block.getType() == PREVIEW_BLOCK) {
-                        block.setBlockData(finalData, false);
+                Block block = entry.getKey().getBlock();
+                Material currentType = block.getType();
+                
+                if (entry.getValue()) {
+                    // This block should be REMOVED (was showing red glass preview)
+                    if (currentType == PREVIEW_REMOVE_BLOCK) {
+                        block.setType(Material.AIR, false);
                         convertedCount++;
                     }
                 } else {
-                    convertedCount++; // Air blocks already done
+                    // This block should be ADDED (was showing green glass preview)
+                    if (currentType == PREVIEW_BLOCK) {
+                        block.setBlockData(finalData, false);
+                        convertedCount++;
+                    }
+                }
+            }
+            return convertedCount;
+        }
+        
+        private int convertToFinalWithWorldEdit() {
+            BlockData finalData = finalBlock.createBlockData();
+            int convertedCount = 0;
+            
+            // STEP 1: First restore original blocks using Bukkit (without WorldEdit)
+            // This ensures WorldEdit will see the ORIGINAL state, not the preview blocks
+            for (Map.Entry<Location, BlockData> entry : originalBlocks.entrySet()) {
+                Location loc = entry.getKey();
+                if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
+                    loc.getBlock().setBlockData(entry.getValue(), false);
                 }
             }
             
-            // Save for undo
-            plugin.getUndoManager().saveOperation(player, new LinkedHashMap<>(originalBlocks));
-            plugin.getMessageUtil().sendInfo(player, "Terrain generated: " + convertedCount + " blocks placed.");
+            // STEP 2: Now apply final changes with WorldEdit
+            // WorldEdit will record the original blocks as "before" state for //undo
+            EditSession editSession = null;
+            try {
+                editSession = openEditSession(player, previewLocations.size());
+                
+                for (Map.Entry<Location, Boolean> entry : previewLocations.entrySet()) {
+                    Location loc = entry.getKey();
+                    BlockVector3 pt = BlockVector3.at(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
+                    
+                    if (entry.getValue()) {
+                        // This block should be REMOVED
+                        editSession.setBlock(pt, BukkitAdapter.adapt(Material.AIR.createBlockData()));
+                        convertedCount++;
+                    } else {
+                        // This block should be ADDED
+                        editSession.setBlock(pt, toWEBlockState(finalData));
+                        convertedCount++;
+                    }
+                }
+                
+                // Close and register in history for //undo support
+                editSession.close();
+                
+                BukkitPlayer wePlayer = BukkitAdapter.adapt(player);
+                LocalSession localSession = WorldEdit.getInstance().getSessionManager().get(wePlayer);
+                if (localSession != null) {
+                    localSession.remember(editSession);
+                }
+                
+            } catch (WorldEditException e) {
+                plugin.getLogger().warning("WorldEdit error in TerrainBrush preview conversion: " + e.getMessage());
+                if (editSession != null) {
+                    try { editSession.close(); } catch (Exception ignored) {}
+                }
+                // Fallback: blocks are already restored, just apply final with Bukkit
+                return convertToFinalWithBukkitAfterRestore();
+            } catch (Exception e) {
+                plugin.getLogger().warning("Failed to use WorldEdit in TerrainBrush preview: " + e.getMessage());
+                if (editSession != null) {
+                    try { editSession.close(); } catch (Exception ignored) {}
+                }
+                return convertToFinalWithBukkitAfterRestore();
+            }
+            
+            return convertedCount;
+        }
+        
+        /**
+         * Applies final blocks after original blocks have already been restored.
+         * Used as fallback when WorldEdit fails after restoration.
+         */
+        private int convertToFinalWithBukkitAfterRestore() {
+            BlockData finalData = finalBlock.createBlockData();
+            int convertedCount = 0;
+            
+            for (Map.Entry<Location, Boolean> entry : previewLocations.entrySet()) {
+                Location loc = entry.getKey();
+                Block block = loc.getBlock();
+                
+                if (entry.getValue()) {
+                    // This block should be REMOVED
+                    block.setType(Material.AIR, false);
+                    convertedCount++;
+                } else {
+                    // This block should be ADDED
+                    block.setBlockData(finalData, false);
+                    convertedCount++;
+                }
+            }
+            return convertedCount;
         }
         
         public void cancel() {
@@ -315,12 +629,21 @@ public class TerrainBrush {
             if (conversionTask != null) {
                 conversionTask.cancel();
             }
+            if (countdownTask != null) {
+                countdownTask.cancel();
+            }
+            removeBossbar();
             
-            // Restore original blocks
+            // Restore original blocks (both green and red preview blocks)
             for (Map.Entry<Location, BlockData> entry : originalBlocks.entrySet()) {
                 Location loc = entry.getKey();
                 if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
-                    loc.getBlock().setBlockData(entry.getValue(), false);
+                    Block block = loc.getBlock();
+                    Material currentType = block.getType();
+                    // Only restore if it's still a preview block (green or red)
+                    if (currentType == PREVIEW_BLOCK || currentType == PREVIEW_REMOVE_BLOCK) {
+                        block.setBlockData(entry.getValue(), false);
+                    }
                 }
             }
             
@@ -524,15 +847,22 @@ public class TerrainBrush {
                 }
             }
             case SMOOTH -> {
-                int avgY = getAvgHeight(world, x, z, 2);
+                // Use adaptive radius based on targetH for better smoothing at higher elevations
+                int smoothRadius = Math.max(2, Math.min(5, targetH / 2 + 1));
+                int avgY = getWeightedAvgHeight(world, x, z, smoothRadius);
                 int diff = avgY - surfaceY;
-                if (diff > 0) {
-                    int amt = Math.min(diff, targetH);
+                
+                // Apply smoothing with intensity factor for more consistent results
+                double smoothFactor = Math.min(1.0, targetH / 10.0 + 0.3);
+                int effectiveDiff = (int) Math.round(diff * smoothFactor);
+                
+                if (effectiveDiff > 0) {
+                    int amt = Math.min(effectiveDiff, targetH);
                     for (int y = surfaceY + 1; y <= surfaceY + amt; y++) {
                         changes.add(new BlockChange(x, y, z, false));
                     }
-                } else if (diff < 0) {
-                    int amt = Math.min(-diff, targetH);
+                } else if (effectiveDiff < 0) {
+                    int amt = Math.min(-effectiveDiff, targetH);
                     for (int y = surfaceY; y > surfaceY - amt; y--) {
                         changes.add(new BlockChange(x, y, z, true));
                     }
@@ -682,6 +1012,40 @@ public class TerrainBrush {
             }
         }
         return count > 0 ? total / count : 64;
+    }
+    
+    /**
+     * Calculates weighted average height using gaussian-like weights.
+     * This provides better smoothing results, especially for tall mountains.
+     */
+    private int getWeightedAvgHeight(World world, int cx, int cz, int r) {
+        double totalWeight = 0;
+        double weightedSum = 0;
+        
+        // Get center height for reference
+        int centerY = world.getHighestBlockYAt(cx, cz);
+        
+        for (int x = -r; x <= r; x++) {
+            for (int z = -r; z <= r; z++) {
+                // Calculate distance-based weight (gaussian-like falloff)
+                double dist = Math.sqrt(x * x + z * z);
+                double weight = Math.exp(-(dist * dist) / (2.0 * r * r / 4.0));
+                
+                int height = world.getHighestBlockYAt(cx + x, cz + z);
+                
+                // Reduce weight for heights that are very different from center
+                // This prevents extreme outliers from skewing the average
+                int heightDiff = Math.abs(height - centerY);
+                if (heightDiff > r * 2) {
+                    weight *= 0.5;
+                }
+                
+                weightedSum += height * weight;
+                totalWeight += weight;
+            }
+        }
+        
+        return totalWeight > 0 ? (int) Math.round(weightedSum / totalWeight) : centerY;
     }
 
     public void clearCache() { surfaceHeightCache.clear(); }

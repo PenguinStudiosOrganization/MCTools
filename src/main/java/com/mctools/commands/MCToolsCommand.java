@@ -7,36 +7,31 @@ import com.mctools.shapes.*;
 import com.mctools.utils.BlockPlacer;
 import com.mctools.utils.ConfigManager;
 import com.mctools.utils.MessageUtil;
+import com.mctools.utils.PerformanceMonitor;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.Particle;
+import org.bukkit.World;
+import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemFlag;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * Command executor for {@code /mct} (alias {@code /mctools}).
- *
- * <p>Responsibilities:
- * <ul>
- *   <li>Parse sub-commands (shapes, admin, gradient, tree).</li>
- *   <li>Validate arguments and permissions.</li>
- *   <li>Delegate block placement to {@link BlockPlacer}.</li>
- *   <li>Provide user feedback (help, errors, suggestions).</li>
- * </ul>
- *
- * <p>Design notes:
- * <ul>
- *   <li>Cooldowns are tracked per-player to prevent spam.</li>
- *   <li>Shape creation is delegated to {@link Shape} subclasses.</li>
- *   <li>Gradient commands use {@link GradientEngine} for color interpolation.</li>
- * </ul>
+ * Parses sub-commands (shapes, admin, gradient, tree), validates arguments
+ * and permissions, and delegates block placement to {@link BlockPlacer}.
  */
 public class MCToolsCommand implements CommandExecutor {
 
@@ -48,28 +43,20 @@ public class MCToolsCommand implements CommandExecutor {
     private final GradientEngine gradientEngine;
     private final GradientApplier gradientApplier;
 
-    /**
-     * Creates a new MCToolsCommand instance.
-     *
-     * @param plugin The plugin instance
-     */
     public MCToolsCommand(MCTools plugin) {
         this.plugin = plugin;
         this.cooldowns = new HashMap<>();
         this.gradientEngine = new GradientEngine();
         this.gradientApplier = new GradientApplier();
     }
-    
-    /**
-     * Gets the shared BlockPlacer instance from the plugin.
-     */
+
     private BlockPlacer getBlockPlacer() {
         return plugin.getBlockPlacer();
     }
 
     @Override
-    public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, 
-                            @NotNull String label, @NotNull String[] args) {
+    public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
+                             @NotNull String label, @NotNull String[] args) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage("This command can only be used by players!");
             return true;
@@ -87,7 +74,7 @@ public class MCToolsCommand implements CommandExecutor {
             return true;
         }
 
-        String subCommand = args[0].toLowerCase();
+        String subCommand = args[0].toLowerCase(Locale.ROOT);
 
         // Handle admin commands
         switch (subCommand) {
@@ -135,8 +122,8 @@ public class MCToolsCommand implements CommandExecutor {
                     msg.sendError(player, "No operations to undo!");
                 } else {
                     msg.sendInfo(player, "Undone " + count + " operation(s)! Restored " + restored + " blocks.");
-                    msg.sendInfo(player, "Remaining: " + plugin.getUndoManager().getUndoCount(player) + " undo, " + 
-                                plugin.getUndoManager().getRedoCount(player) + " redo");
+                    msg.sendInfo(player, "Remaining: " + plugin.getUndoManager().getUndoCount(player) + " undo, " +
+                        plugin.getUndoManager().getRedoCount(player) + " redo");
                 }
                 return true;
             }
@@ -163,81 +150,160 @@ public class MCToolsCommand implements CommandExecutor {
                     msg.sendError(player, "No operations to redo!");
                 } else {
                     msg.sendInfo(player, "Redone " + count + " operation(s)! Restored " + restored + " blocks.");
-                    msg.sendInfo(player, "Remaining: " + plugin.getUndoManager().getUndoCount(player) + " undo, " + 
-                                plugin.getUndoManager().getRedoCount(player) + " redo");
+                    msg.sendInfo(player, "Remaining: " + plugin.getUndoManager().getUndoCount(player) + " undo, " +
+                        plugin.getUndoManager().getRedoCount(player) + " redo");
                 }
                 return true;
             }
+            case "center" -> {
+                if (!player.hasPermission("mctools.center")) {
+                    msg.sendError(player, "You don't have permission to use /mct center!");
+                    return true;
+                }
+                runCenterScan(player);
+                return true;
+            }
             case "cancel" -> {
-                boolean cancelled = false;
-                BlockPlacer blockPlacer = getBlockPlacer();
-                
-                // Cancel and restore placement task (includes already placed blocks)
-                if (blockPlacer.cancelTask(player)) {
-                    cancelled = true;
+                try {
+                    boolean cancelled = false;
+                    BlockPlacer blockPlacer = getBlockPlacer();
+
+                    if (blockPlacer.cancelTask(player)) {
+                        cancelled = true;
+                    }
+
+                    if (blockPlacer.cancelPreview(player)) {
+                        cancelled = true;
+                    }
+
+                    try {
+                        if (plugin.getBrushManager() != null
+                                && plugin.getBrushManager().getTerrainBrush() != null
+                                && plugin.getBrushManager().getTerrainBrush().hasActivePreview(player)) {
+                            plugin.getBrushManager().getTerrainBrush().cancelPreview(player);
+                            cancelled = true;
+                        }
+                    } catch (Exception ignored) { /* brush not available */ }
+
+                    if (cancelled) {
+                        msg.sendInfo(player, "Operation cancelled and all blocks restored!");
+                    } else {
+                        msg.sendError(player, "No active operation to cancel!");
+                    }
+                } catch (Exception e) {
+                    msg.sendError(player, "Error cancelling operation: " + e.getMessage());
+                    plugin.getLogger().warning("Error in cancel command: " + e.getMessage());
                 }
-                
-                // Cancel and restore preview
-                if (blockPlacer.cancelPreview(player)) {
-                    cancelled = true;
-                }
-                
-                // Also cancel terrain brush preview
-                if (plugin.getBrushManager().getTerrainBrush().hasActivePreview(player)) {
-                    plugin.getBrushManager().getTerrainBrush().cancelPreview(player);
-                    cancelled = true;
-                }
-                
-                if (cancelled) {
-                    msg.sendSuccess(player, "Operation", 0);
-                    msg.sendInfo(player, "§aOperation cancelled and all blocks restored!");
-                } else {
-                    msg.sendError(player, "No active operation to cancel!");
+                return true;
+            }
+            case "stop" -> {
+                // Alias for cancel
+                try {
+                    boolean cancelled = false;
+                    BlockPlacer blockPlacer = getBlockPlacer();
+
+                    if (blockPlacer.cancelTask(player)) {
+                        cancelled = true;
+                    }
+
+                    if (blockPlacer.cancelPreview(player)) {
+                        cancelled = true;
+                    }
+
+                    try {
+                        if (plugin.getBrushManager() != null
+                                && plugin.getBrushManager().getTerrainBrush() != null
+                                && plugin.getBrushManager().getTerrainBrush().hasActivePreview(player)) {
+                            plugin.getBrushManager().getTerrainBrush().cancelPreview(player);
+                            cancelled = true;
+                        }
+                    } catch (Exception ignored) { /* brush not available */ }
+
+                    if (cancelled) {
+                        msg.sendInfo(player, "Operation stopped and all blocks restored!");
+                    } else {
+                        msg.sendError(player, "No active operation to stop!");
+                    }
+                } catch (Exception e) {
+                    msg.sendError(player, "Error stopping operation: " + e.getMessage());
+                    plugin.getLogger().warning("Error in stop command: " + e.getMessage());
                 }
                 return true;
             }
             case "pause" -> {
-                BlockPlacer blockPlacer = getBlockPlacer();
-                boolean paused = blockPlacer.pauseTask(player);
-                // Also pause terrain brush
-                if (plugin.getBrushManager().getTerrainBrush().pausePreview(player)) {
-                    paused = true;
-                }
-                if (paused) {
-                    msg.sendInfo(player, "§ePaused! §7Use §f/mct resume §7to continue.");
-                } else {
-                    msg.sendError(player, "No active operation to pause!");
+                try {
+                    BlockPlacer blockPlacer = getBlockPlacer();
+                    boolean paused = blockPlacer.pauseTask(player);
+                    try {
+                        if (plugin.getBrushManager() != null
+                                && plugin.getBrushManager().getTerrainBrush() != null
+                                && plugin.getBrushManager().getTerrainBrush().pausePreview(player)) {
+                            paused = true;
+                        }
+                    } catch (Exception ignored) { /* brush not available */ }
+
+                    if (paused) {
+                        msg.sendInfo(player, "Paused! Use /mct resume to continue.");
+                    } else {
+                        msg.sendError(player, "No active operation to pause!");
+                    }
+                } catch (Exception e) {
+                    msg.sendError(player, "Error pausing operation: " + e.getMessage());
+                    plugin.getLogger().warning("Error in pause command: " + e.getMessage());
                 }
                 return true;
             }
             case "resume" -> {
-                BlockPlacer blockPlacer = getBlockPlacer();
-                boolean resumed = blockPlacer.resumeTask(player);
-                // Also resume terrain brush
-                if (plugin.getBrushManager().getTerrainBrush().resumePreview(player)) {
-                    resumed = true;
+                try {
+                    BlockPlacer blockPlacer = getBlockPlacer();
+                    boolean resumed = blockPlacer.resumeTask(player);
+                    try {
+                        if (plugin.getBrushManager() != null
+                                && plugin.getBrushManager().getTerrainBrush() != null
+                                && plugin.getBrushManager().getTerrainBrush().resumePreview(player)) {
+                            resumed = true;
+                        }
+                    } catch (Exception ignored) { /* brush not available */ }
+
+                    if (resumed) {
+                        msg.sendInfo(player, "Resumed!");
+                    } else {
+                        msg.sendError(player, "No paused operation to resume!");
+                    }
+                } catch (Exception e) {
+                    msg.sendError(player, "Error resuming operation: " + e.getMessage());
+                    plugin.getLogger().warning("Error in resume command: " + e.getMessage());
                 }
-                if (resumed) {
-                    msg.sendInfo(player, "§aResumed!");
-                } else {
-                    msg.sendError(player, "No paused operation to resume!");
+                return true;
+            }
+            case "performance", "perf" -> {
+                sendPerformanceReport(player);
+                return true;
+            }
+            case "wand" -> {
+                if (!player.hasPermission("mctools.brush")) {
+                    msg.sendError(player, "You don't have permission to use the terrain brush!");
+                    return true;
                 }
+                giveTerrainWand(player);
+                return true;
+            }
+            case "worldeditwand" -> {
+                // Internal command to give WorldEdit wand using their API
+                plugin.getPlayerListener().giveWorldEditWand(player);
                 return true;
             }
         }
 
-        // Check cooldown
         if (!checkCooldown(player)) {
             return true;
         }
 
-        // Check if player already has an active task
         if (getBlockPlacer().hasActiveTask(player)) {
             msg.sendWarning(player, "You already have an active operation! Use /mct cancel to stop it.");
             return true;
         }
 
-        // Handle shape commands
         try {
             handleShapeCommand(player, subCommand, args);
         } catch (IllegalArgumentException e) {
@@ -252,8 +318,200 @@ public class MCToolsCommand implements CommandExecutor {
     }
 
     /**
-     * Checks if the player is on cooldown.
+     * Safe wrapper for sending messages - catches any exception and sends a fallback.
      */
+    private void safeSendMessage(Player player, String message) {
+        try {
+            plugin.getMessageUtil().sendInfo(player, message);
+        } catch (Exception e) {
+            player.sendMessage("§a§lMCTools §7│ §7" + message);
+        }
+    }
+
+    /** Finds the center of a nearby structure within 200 blocks using ray sampling + bounded flood-fill. */
+    private void runCenterScan(Player player) {
+        MessageUtil msg = plugin.getMessageUtil();
+        World world = player.getWorld();
+
+        final int maxRadius = 200;
+        final int rays = 72;
+        final int rayStep = 2;
+        final int maxVisited = 60000;
+        final long timeoutMs = 2000;
+
+        msg.sendInfo(player, "Scanning for nearby structure (radius " + maxRadius + ")...");
+
+        new BukkitRunnable() {
+            final long start = System.currentTimeMillis();
+            int rayIndex = 0;
+
+            int bestSize = 0;
+            CenterResult best = null;
+
+            final Set<Long> visited = new HashSet<>();
+
+            @Override
+            public void run() {
+                if (!player.isOnline()) {
+                    cancel();
+                    return;
+                }
+
+                if (System.currentTimeMillis() - start > timeoutMs) {
+                    finish();
+                    return;
+                }
+
+                int raysPerTick = 6;
+                while (raysPerTick-- > 0 && rayIndex < rays) {
+                    Block seed = sampleRaySeed(player, rayIndex, rays, rayStep, maxRadius);
+                    rayIndex++;
+
+                    if (seed == null) continue;
+
+                    long k = pack(seed.getX(), seed.getY(), seed.getZ());
+                    if (visited.contains(k)) continue;
+
+                    CenterResult r = floodCluster(world, seed, maxVisited, visited);
+                    if (r == null) continue;
+
+                    if (r.size > bestSize) {
+                        bestSize = r.size;
+                        best = r;
+                    }
+                }
+
+                if (rayIndex >= rays) {
+                    finishWith(best);
+                }
+            }
+
+            private void finish() {
+                finishWith(best);
+            }
+
+            private void finishWith(CenterResult best) {
+                cancel();
+
+                if (best == null || best.size < 30) {
+                    msg.sendError(player, "No structure found within " + maxRadius + " blocks.");
+                    return;
+                }
+
+                Location centroid = new Location(world,
+                    best.sumX / (double) best.size,
+                    best.sumY / (double) best.size,
+                    best.sumZ / (double) best.size);
+
+                Location bboxCenter = new Location(world,
+                    (best.minX + best.maxX) / 2.0 + 0.5,
+                    (best.minY + best.maxY) / 2.0 + 0.5,
+                    (best.minZ + best.maxZ) / 2.0 + 0.5);
+
+                Location center = new Location(world,
+                    centroid.getBlockX() + 0.5,
+                    centroid.getBlockY() + 0.5,
+                    centroid.getBlockZ() + 0.5);
+
+                msg.sendInfo(player, "Center found (cluster size " + best.size + "):");
+                msg.sendInfo(player, "Centroid: " + centroid.getBlockX() + " " + centroid.getBlockY() + " " + centroid.getBlockZ());
+                msg.sendInfo(player, "BBox center: " + bboxCenter.getBlockX() + " " + bboxCenter.getBlockY() + " " + bboxCenter.getBlockZ());
+
+                spawnMarker(world, center);
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    private void spawnMarker(World world, Location center) {
+        for (int i = 0; i < 30; i++) {
+            double y = center.getY() + (i * 0.15);
+            world.spawnParticle(Particle.END_ROD, center.getX(), y, center.getZ(), 2, 0.02, 0.02, 0.02, 0);
+        }
+    }
+
+    private Block sampleRaySeed(Player player, int rayIndex, int rays, int step, int maxDist) {
+        Location eye = player.getEyeLocation();
+        double baseYaw = eye.getYaw();
+
+        double yaw = baseYaw + (rayIndex * (360.0 / rays));
+        double rad = Math.toRadians(yaw);
+        double dx = -Math.sin(rad);
+        double dz = Math.cos(rad);
+
+        World world = player.getWorld();
+        int startY = eye.getBlockY();
+
+        for (int d = 2; d <= maxDist; d += step) {
+            int x = (int) Math.floor(eye.getX() + dx * d);
+            int z = (int) Math.floor(eye.getZ() + dz * d);
+
+            for (int dy = -6; dy <= 6; dy += 2) {
+                int y = startY + dy;
+                if (y < world.getMinHeight() || y >= world.getMaxHeight()) continue;
+                Block b = world.getBlockAt(x, y, z);
+                if (!b.getType().isAir() && b.getType() != Material.WATER && b.getType() != Material.LAVA) {
+                    return b;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private CenterResult floodCluster(World world, Block seed, int maxVisited, Set<Long> visited) {
+        ArrayDeque<Block> q = new ArrayDeque<>();
+        q.add(seed);
+
+        CenterResult res = new CenterResult();
+
+        while (!q.isEmpty() && res.size < maxVisited) {
+            Block b = q.poll();
+            long key = pack(b.getX(), b.getY(), b.getZ());
+            if (!visited.add(key)) continue;
+
+            Material t = b.getType();
+            if (t.isAir()) continue;
+            if (t == Material.WATER || t == Material.LAVA) continue;
+
+            res.accept(b);
+
+            int x = b.getX(), y = b.getY(), z = b.getZ();
+            if (y - 1 >= world.getMinHeight()) q.add(world.getBlockAt(x, y - 1, z));
+            if (y + 1 < world.getMaxHeight()) q.add(world.getBlockAt(x, y + 1, z));
+            q.add(world.getBlockAt(x + 1, y, z));
+            q.add(world.getBlockAt(x - 1, y, z));
+            q.add(world.getBlockAt(x, y, z + 1));
+            q.add(world.getBlockAt(x, y, z - 1));
+        }
+
+        return res.size == 0 ? null : res;
+    }
+
+    private long pack(int x, int y, int z) {
+        return (((long) x & 0x3FFFFFF) << 38) | (((long) z & 0x3FFFFFF) << 12) | ((long) y & 0xFFF);
+    }
+
+    private static class CenterResult {
+        int size = 0;
+        long sumX = 0, sumY = 0, sumZ = 0;
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+
+        void accept(Block b) {
+            int x = b.getX(), y = b.getY(), z = b.getZ();
+            size++;
+            sumX += x;
+            sumY += y;
+            sumZ += z;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            minZ = Math.min(minZ, z);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+            maxZ = Math.max(maxZ, z);
+        }
+    }
+
     private boolean checkCooldown(Player player) {
         if (player.hasPermission("mctools.bypass.limit")) {
             return true;
@@ -271,8 +529,8 @@ public class MCToolsCommand implements CommandExecutor {
         if (lastUse != null) {
             long elapsed = (now - lastUse) / 1000;
             if (elapsed < cooldownSeconds) {
-                plugin.getMessageUtil().sendWarning(player, 
-                        "Please wait " + (cooldownSeconds - elapsed) + " seconds before using another command!");
+                plugin.getMessageUtil().sendWarning(player,
+                    "Please wait " + (cooldownSeconds - elapsed) + " seconds before using another command!");
                 return false;
             }
         }
@@ -281,17 +539,12 @@ public class MCToolsCommand implements CommandExecutor {
         return true;
     }
 
-    /**
-     * Handles shape generation commands.
-     */
     private void handleShapeCommand(Player player, String shapeCmd, String[] args) {
-        // Check if this is a tree command
         if (shapeCmd.equals("tree")) {
             handleTreeCommand(player, args);
             return;
         }
 
-        // Check if this is a gradient command
         if (shapeCmd.startsWith("g")) {
             handleGradientCommand(player, shapeCmd, args);
             return;
@@ -300,7 +553,6 @@ public class MCToolsCommand implements CommandExecutor {
         MessageUtil msg = plugin.getMessageUtil();
         ConfigManager config = plugin.getConfigManager();
 
-        // Parse block type (always second argument for shapes)
         if (args.length < 2) {
             msg.sendUsage(player, "/mct " + shapeCmd + " <block> <parameters...>");
             return;
@@ -315,25 +567,25 @@ public class MCToolsCommand implements CommandExecutor {
 
         Shape shape = createShape(player, shapeCmd, args);
         if (shape == null) {
-            return; // Error already sent
+            return;
         }
 
-        // Check permission
         if (!player.hasPermission(shape.getPermission())) {
             msg.sendError(player, "You don't have permission to create " + shape.getName() + "s!");
             return;
         }
 
-        // Check estimated block count
         int estimated = shape.getEstimatedBlockCount();
         int maxBlocks = config.getMaxBlocks();
 
-        if (maxBlocks > 0 && estimated > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
-            msg.sendError(player, "Operation would place ~" + estimated + " blocks (max: " + maxBlocks + ")");
+        // Hard limit - no bypass, even for OPs
+        if (maxBlocks > 0 && estimated > maxBlocks) {
+            msg.sendError(player, "Operation would place ~" + String.format("%,d", estimated) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce the shape size or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
             return;
         }
 
-        // Generate and place blocks
         Location center = player.getLocation();
         List<Location> blocks = shape.generate(center);
 
@@ -342,39 +594,38 @@ public class MCToolsCommand implements CommandExecutor {
             return;
         }
 
-        // Final block count check
-        if (maxBlocks > 0 && blocks.size() > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
-            msg.sendError(player, "Operation would place " + blocks.size() + " blocks (max: " + maxBlocks + ")");
+        // Hard limit on actual block count - no bypass
+        if (maxBlocks > 0 && blocks.size() > maxBlocks) {
+            msg.sendError(player, "Operation would place " + String.format("%,d", blocks.size()) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce the shape size or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
             return;
         }
 
-        msg.sendInfo(player, "Preparing " + shape.getName() + " with " + blocks.size() + " blocks...");
+        msg.sendInfo(player, "Preparing " + shape.getName() + " with " + String.format("%,d", blocks.size()) + " blocks...");
+        // Show performance info for large shapes
+        if (blocks.size() > 1000) {
+            msg.sendRaw(player, plugin.getPerformanceMonitor().getFullPerformanceSummaryMiniMessage());
+        }
         getBlockPlacer().placeBlocks(player, blocks, blockData, shape.getName());
     }
 
-    /**
-     * Handles gradient shape commands (g-prefixed).
-     */
     private void handleGradientCommand(Player player, String cmd, String[] args) {
         MessageUtil msg = plugin.getMessageUtil();
         ConfigManager config = plugin.getConfigManager();
 
-        // Permission check
         if (!player.hasPermission("mctools.gradient")) {
             msg.sendError(player, "You don't have permission to use gradient shapes!");
             return;
         }
 
-        // Strip 'g' prefix to get base command: "gsph" -> "sph", "ghsph" -> "hsph"
         String baseCmd = cmd.substring(1);
 
-        // Validate minimum args: /mct g<shape> <colors> <params...>
         if (args.length < 3) {
             msg.sendUsage(player, "/mct " + cmd + " <#hex1,#hex2,...> <params...> [-dir y|x|z|radial] [-interp oklab|lab|rgb|hsl] [-unique]");
             return;
         }
 
-        // Parse and validate hex colors
         String colorsArg = args[1];
         if (!HEX_COLORS_PATTERN.matcher(colorsArg).matches()) {
             msg.sendError(player, "Invalid colors! Use comma-separated hex: #ff0000,#0000ff");
@@ -392,15 +643,12 @@ public class MCToolsCommand implements CommandExecutor {
             return;
         }
 
-        // Scan for optional flags and separate them from positional args
         String direction = "y";
         String interpolation = "oklab";
         boolean uniqueOnly = false;
         List<String> positionalArgs = new ArrayList<>();
-        positionalArgs.add(args[0]); // original command (not used by createShape directly)
-
-        // args[1] is colors, skip it; positionalArgs[1] needs to be a placeholder for block
-        positionalArgs.add("stone"); // placeholder block (not used for gradient but createShape needs it at index 1)
+        positionalArgs.add(args[0]);
+        positionalArgs.add("stone");
 
         for (int i = 2; i < args.length; i++) {
             String a = args[i];
@@ -425,18 +673,14 @@ public class MCToolsCommand implements CommandExecutor {
 
         String[] rebuiltArgs = positionalArgs.toArray(new String[0]);
 
-        // Create shape using existing createShape
         Shape shape = createShape(player, baseCmd, rebuiltArgs);
-        if (shape == null) {
-            return;
-        }
+        if (shape == null) return;
 
         if (!player.hasPermission(shape.getPermission())) {
             msg.sendError(player, "You don't have permission to create " + shape.getName() + "s!");
             return;
         }
 
-        // Generate locations
         Location center = player.getLocation();
         List<Location> blocks = shape.generate(center);
 
@@ -446,21 +690,21 @@ public class MCToolsCommand implements CommandExecutor {
         }
 
         int maxBlocks = config.getMaxBlocks();
-        if (maxBlocks > 0 && blocks.size() > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
-            msg.sendError(player, "Operation would place " + blocks.size() + " blocks (max: " + maxBlocks + ")");
+        // Hard limit - no bypass, even for OPs
+        if (maxBlocks > 0 && blocks.size() > maxBlocks) {
+            msg.sendError(player, "Operation would place " + String.format("%,d", blocks.size()) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce the shape size or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
             return;
         }
 
-        // For 2D shapes with -dir y, auto-fallback to radial
         if (direction.equals("y") && gradientApplier.is2DShape(blocks)) {
             direction = "radial";
         }
 
-        // Count distinct axis values for numSteps
         int distinctValues = gradientApplier.countDistinctAxisValues(blocks, center, direction);
         int numSteps = Math.max(2, Math.min(distinctValues, 50));
 
-        // Generate gradient
         List<GradientEngine.GradientBlock> gradientSteps =
             gradientEngine.generateGradient(hexColors, numSteps, interpolation, uniqueOnly);
 
@@ -469,26 +713,14 @@ public class MCToolsCommand implements CommandExecutor {
             return;
         }
 
-        // Apply gradient to positions
         Map<Location, BlockData> blockMap =
             gradientApplier.applyGradient(blocks, center, gradientSteps, direction);
 
-        // Count unique block types
-        long uniqueBlockCount = blockMap.values().stream()
-            .map(bd -> bd.getMaterial().name())
-            .distinct()
-            .count();
-
-        msg.sendInfo(player, "Gradient " + shape.getName() + ": " + numSteps + " steps, "
-            + uniqueBlockCount + " block types, " + blocks.size() + " total blocks");
+        msg.sendInfo(player, "Gradient " + shape.getName() + ": " + numSteps + " steps, " + blocks.size() + " total blocks");
 
         getBlockPlacer().placeGradientBlocks(player, blockMap, "Gradient " + shape.getName());
     }
 
-    /**
-     * Handles tree generation command.
-     * Format: /mct tree <woodType> seed:<int> th:<int> tr:<int> bd:<float> fd:<float> fr:<int> [-roots] [-special]
-     */
     private void handleTreeCommand(Player player, String[] args) {
         MessageUtil msg = plugin.getMessageUtil();
         ConfigManager config = plugin.getConfigManager();
@@ -499,7 +731,6 @@ public class MCToolsCommand implements CommandExecutor {
             return;
         }
 
-        // Parse wood type (positional, always first)
         TreeGenerator.WoodType woodType;
         try {
             woodType = TreeGenerator.WoodType.valueOf(args[1].toUpperCase());
@@ -509,13 +740,11 @@ public class MCToolsCommand implements CommandExecutor {
             return;
         }
 
-        // Permission check
         if (!player.hasPermission("mctools.shapes.tree")) {
             msg.sendError(player, "You don't have permission to generate trees!");
             return;
         }
 
-        // Default values
         long seed = System.currentTimeMillis();
         int trunkHeight = 12;
         int trunkRadius = 2;
@@ -525,7 +754,6 @@ public class MCToolsCommand implements CommandExecutor {
         boolean enableRoots = false;
         boolean useSpecialBlocks = false;
 
-        // Parse key:value and flag arguments
         for (int i = 2; i < args.length; i++) {
             String arg = args[i].toLowerCase();
             try {
@@ -582,11 +810,13 @@ public class MCToolsCommand implements CommandExecutor {
             enableRoots, useSpecialBlocks, woodType
         );
 
-        // Check block limit
         int estimated = generator.getEstimatedBlockCount();
         int maxBlocks = config.getMaxBlocks();
-        if (maxBlocks > 0 && estimated > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
-            msg.sendError(player, "Tree would place ~" + estimated + " blocks (max: " + maxBlocks + ")");
+        // Hard limit - no bypass, even for OPs
+        if (maxBlocks > 0 && estimated > maxBlocks) {
+            msg.sendError(player, "Tree would place ~" + String.format("%,d", estimated) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce the tree size or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
             return;
         }
 
@@ -598,19 +828,22 @@ public class MCToolsCommand implements CommandExecutor {
             return;
         }
 
-        // Final block count check
-        if (maxBlocks > 0 && blocks.size() > maxBlocks && !player.hasPermission("mctools.bypass.limit")) {
-            msg.sendError(player, "Tree would place " + blocks.size() + " blocks (max: " + maxBlocks + ")");
+        // Hard limit - no bypass
+        if (maxBlocks > 0 && blocks.size() > maxBlocks) {
+            msg.sendError(player, "Tree would place " + String.format("%,d", blocks.size()) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce the tree size or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
             return;
         }
 
-        msg.sendInfo(player, "Generating " + woodType.name().toLowerCase() + " tree with " + blocks.size() + " blocks (seed: " + seed + ")");
+        msg.sendInfo(player, "Generating " + woodType.name().toLowerCase() + " tree with " + String.format("%,d", blocks.size()) + " blocks (seed: " + seed + ")");
+        // Show performance info for large trees
+        if (blocks.size() > 1000) {
+            msg.sendRaw(player, plugin.getPerformanceMonitor().getFullPerformanceSummaryMiniMessage());
+        }
         getBlockPlacer().placeGradientBlocks(player, blocks, generator.getName());
     }
 
-    /**
-     * Creates a shape based on the command and arguments.
-     */
     private Shape createShape(Player player, String cmd, String[] args) {
         MessageUtil msg = plugin.getMessageUtil();
         ConfigManager config = plugin.getConfigManager();
@@ -669,52 +902,46 @@ public class MCToolsCommand implements CommandExecutor {
                     int thickness = parseInt(args[4], "thickness");
                     yield new Spiral(radius, turns, thickness);
                 }
-
+                
                 // 2D Shapes - Hollow
                 case "hcir" -> {
                     requireArgs(args, 4, "/mct hcir <block> <radius> <thickness>");
                     int radius = parseRadius(args[2], config);
-                    int thickness = parseInt(args[3], "thickness");
+                    int thickness = parseThickness(args[3], config);
                     yield new Circle(radius, true, thickness);
                 }
                 case "hsq" -> {
                     requireArgs(args, 4, "/mct hsq <block> <size> <thickness>");
                     int size = parseSize(args[2], config);
-                    int thickness = parseInt(args[3], "thickness");
+                    int thickness = parseThickness(args[3], config);
                     yield new Square(size, true, thickness);
                 }
                 case "hrect" -> {
-                    requireArgs(args, 5, "/mct hrect <block> <radiusX> <radiusZ> <thickness> OR with cornerRadius");
+                    requireArgs(args, 5, "/mct hrect <block> <radiusX> <radiusZ> <thickness> [cornerRadius]");
                     int radiusX = parseRadius(args[2], config);
                     int radiusZ = parseRadius(args[3], config);
-                    int cornerRadius, thickness;
-                    if (args.length > 5) {
-                        cornerRadius = parseInt(args[4], "cornerRadius");
-                        thickness = parseInt(args[5], "thickness");
-                    } else {
-                        cornerRadius = 0;
-                        thickness = parseInt(args[4], "thickness");
-                    }
+                    int thickness = parseThickness(args[4], config);
+                    int cornerRadius = args.length > 5 ? parseInt(args[5], "cornerRadius") : 0;
                     yield new Rectangle(radiusX, radiusZ, cornerRadius, true, thickness);
                 }
                 case "hell" -> {
                     requireArgs(args, 5, "/mct hell <block> <radiusX> <radiusZ> <thickness>");
                     int rx = parseRadius(args[2], config);
                     int rz = parseRadius(args[3], config);
-                    int thickness = parseInt(args[4], "thickness");
+                    int thickness = parseThickness(args[4], config);
                     yield new Ellipse(rx, rz, true, thickness);
                 }
                 case "hpoly" -> {
                     requireArgs(args, 5, "/mct hpoly <block> <radius> <sides> <thickness>");
                     int radius = parseRadius(args[2], config);
                     int sides = parseInt(args[3], "sides");
-                    int thickness = parseInt(args[4], "thickness");
+                    int thickness = parseThickness(args[4], config);
                     if (sides < 3 || sides > 12) {
                         throw new IllegalArgumentException("Sides must be between 3 and 12!");
                     }
                     yield new Polygon(radius, sides, true, thickness);
                 }
-
+                
                 // 3D Shapes - Filled
                 case "sph" -> {
                     requireArgs(args, 3, "/mct sph <block> <radius>");
@@ -747,15 +974,23 @@ public class MCToolsCommand implements CommandExecutor {
                 case "arch" -> {
                     requireArgs(args, 5, "/mct arch <block> <legHeight> <radius> <width>");
                     int legHeight = parseHeight(args[2], config);
-                    int radius = parseRadius(args[3], config);
-                    int width = parseSize(args[4], config);
-                    yield new Arch(legHeight, radius, width);
+                    int archRadius = parseRadius(args[3], config);
+                    int width = parseInt(args[4], "width");
+                    yield new Arch(legHeight, archRadius, width);
                 }
-                case "tor" -> {
+                case "torus", "tor" -> {
                     requireArgs(args, 4, "/mct tor <block> <majorRadius> <minorRadius>");
-                    int majorR = parseRadius(args[2], config);
-                    int minorR = parseRadius(args[3], config);
-                    yield new Torus(majorR, minorR);
+                    int majorRadius = parseRadius(args[2], config);
+                    int minorRadius = parseInt(args[3], "minorRadius");
+                    yield new Torus(majorRadius, minorRadius);
+                }
+                case "helix", "hel" -> {
+                    requireArgs(args, 6, "/mct hel <block> <height> <radius> <turns> <thickness>");
+                    int height = parseHeight(args[2], config);
+                    int radius = parseRadius(args[3], config);
+                    int turns = parseInt(args[4], "turns");
+                    int thickness = parseInt(args[5], "thickness");
+                    yield new Helix(height, radius, turns, thickness);
                 }
                 case "wall" -> {
                     requireArgs(args, 5, "/mct wall <block> <width> <height> <thickness>");
@@ -764,115 +999,92 @@ public class MCToolsCommand implements CommandExecutor {
                     int thickness = parseInt(args[4], "thickness");
                     yield new Wall(width, height, thickness);
                 }
-                case "hel" -> {
-                    requireArgs(args, 6, "/mct hel <block> <height> <radius> <turns> <thickness>");
-                    int height = parseHeight(args[2], config);
-                    int radius = parseRadius(args[3], config);
-                    int turns = parseInt(args[4], "turns");
-                    int thickness = parseInt(args[5], "thickness");
-                    yield new Helix(height, radius, turns, thickness);
+                case "tube" -> {
+                    requireArgs(args, 5, "/mct tube <block> <outerRadius> <innerRadius> <height>");
+                    int outerRadius = parseRadius(args[2], config);
+                    int innerRadius = parseInt(args[3], "innerRadius");
+                    int height = parseHeight(args[4], config);
+                    yield new Tube(outerRadius, innerRadius, height);
                 }
-
+                case "capsule" -> {
+                    requireArgs(args, 4, "/mct capsule <block> <radius> <height>");
+                    int radius = parseRadius(args[2], config);
+                    int height = parseHeight(args[3], config);
+                    yield new Capsule(radius, height);
+                }
+                case "ellipsoid" -> {
+                    requireArgs(args, 5, "/mct ellipsoid <block> <radiusX> <radiusY> <radiusZ>");
+                    int rx = parseRadius(args[2], config);
+                    int ry = parseHeight(args[3], config);
+                    int rz = parseRadius(args[4], config);
+                    yield new Ellipsoid(rx, ry, rz);
+                }
+                
                 // 3D Shapes - Hollow
                 case "hsph" -> {
                     requireArgs(args, 4, "/mct hsph <block> <radius> <thickness>");
                     int radius = parseRadius(args[2], config);
-                    int thickness = parseInt(args[3], "thickness");
+                    int thickness = parseThickness(args[3], config);
                     yield new Sphere(radius, true, thickness);
                 }
                 case "hdome" -> {
                     requireArgs(args, 4, "/mct hdome <block> <radius> <thickness>");
                     int radius = parseRadius(args[2], config);
-                    int thickness = parseInt(args[3], "thickness");
+                    int thickness = parseThickness(args[3], config);
                     yield new Dome(radius, true, thickness);
                 }
                 case "hcyl" -> {
                     requireArgs(args, 5, "/mct hcyl <block> <height> <radius> <thickness>");
                     int height = parseHeight(args[2], config);
                     int radius = parseRadius(args[3], config);
-                    int thickness = parseInt(args[4], "thickness");
+                    int thickness = parseThickness(args[4], config);
                     yield new Cylinder(height, radius, true, thickness);
                 }
                 case "hcone" -> {
                     requireArgs(args, 5, "/mct hcone <block> <height> <radius> <thickness>");
                     int height = parseHeight(args[2], config);
                     int radius = parseRadius(args[3], config);
-                    int thickness = parseInt(args[4], "thickness");
+                    int thickness = parseThickness(args[4], config);
                     yield new Cone(height, radius, true, thickness);
                 }
                 case "hpyr" -> {
                     requireArgs(args, 5, "/mct hpyr <block> <height> <radius> <thickness>");
                     int height = parseHeight(args[2], config);
                     int radius = parseRadius(args[3], config);
-                    int thickness = parseInt(args[4], "thickness");
+                    int thickness = parseThickness(args[4], config);
                     yield new Pyramid(height, radius, true, thickness);
                 }
                 case "harch" -> {
                     requireArgs(args, 6, "/mct harch <block> <legHeight> <radius> <width> <thickness>");
                     int legHeight = parseHeight(args[2], config);
-                    int radius = parseRadius(args[3], config);
-                    int width = parseSize(args[4], config);
-                    int thickness = parseInt(args[5], "thickness");
-                    yield new Arch(legHeight, radius, width, true, thickness);
+                    int archRadius = parseRadius(args[3], config);
+                    int width = parseInt(args[4], "width");
+                    int thickness = parseThickness(args[5], config);
+                    yield new Arch(legHeight, archRadius, width, true, thickness);
                 }
-                case "htor" -> {
+                case "htorus", "htor" -> {
                     requireArgs(args, 5, "/mct htor <block> <majorRadius> <minorRadius> <thickness>");
-                    int majorR = parseRadius(args[2], config);
-                    int minorR = parseRadius(args[3], config);
-                    int thickness = parseInt(args[4], "thickness");
-                    yield new Torus(majorR, minorR, true, thickness);
-                }
-
-                // Ellipsoid
-                case "ellipsoid" -> {
-                    requireArgs(args, 5, "/mct ellipsoid <block> <radiusX> <radiusY> <radiusZ>");
-                    int rx = parseRadius(args[2], config);
-                    int ry = parseRadius(args[3], config);
-                    int rz = parseRadius(args[4], config);
-                    yield new Ellipsoid(rx, ry, rz);
-                }
-                case "hellipsoid" -> {
-                    requireArgs(args, 6, "/mct hellipsoid <block> <radiusX> <radiusY> <radiusZ> <thickness>");
-                    int rx = parseRadius(args[2], config);
-                    int ry = parseRadius(args[3], config);
-                    int rz = parseRadius(args[4], config);
-                    int thickness = parseInt(args[5], "thickness");
-                    yield new Ellipsoid(rx, ry, rz, true, thickness);
-                }
-
-                // Tube
-                case "tube" -> {
-                    requireArgs(args, 5, "/mct tube <block> <height> <radius> <innerRadius>");
-                    int height = parseHeight(args[2], config);
-                    int radius = parseRadius(args[3], config);
-                    int innerRadius = parseRadius(args[4], config);
-                    if (innerRadius >= radius) {
-                        throw new IllegalArgumentException("Inner radius must be less than outer radius!");
-                    }
-                    yield new Tube(height, radius, innerRadius);
-                }
-
-                // Capsule
-                case "capsule" -> {
-                    requireArgs(args, 4, "/mct capsule <block> <radius> <height>");
-                    int radius = parseRadius(args[2], config);
-                    int height = parseHeight(args[3], config);
-                    if (height < 2 * radius) {
-                        throw new IllegalArgumentException("Height must be at least 2x radius for a capsule!");
-                    }
-                    yield new Capsule(radius, height);
+                    int majorRadius = parseRadius(args[2], config);
+                    int minorRadius = parseInt(args[3], "minorRadius");
+                    int thickness = parseThickness(args[4], config);
+                    yield new Torus(majorRadius, minorRadius, true, thickness);
                 }
                 case "hcapsule" -> {
                     requireArgs(args, 5, "/mct hcapsule <block> <radius> <height> <thickness>");
                     int radius = parseRadius(args[2], config);
                     int height = parseHeight(args[3], config);
-                    int thickness = parseInt(args[4], "thickness");
-                    if (height < 2 * radius) {
-                        throw new IllegalArgumentException("Height must be at least 2x radius for a capsule!");
-                    }
+                    int thickness = parseThickness(args[4], config);
                     yield new Capsule(radius, height, true, thickness);
                 }
-
+                case "hellipsoid" -> {
+                    requireArgs(args, 6, "/mct hellipsoid <block> <radiusX> <radiusY> <radiusZ> <thickness>");
+                    int rx = parseRadius(args[2], config);
+                    int ry = parseHeight(args[3], config);
+                    int rz = parseRadius(args[4], config);
+                    int thickness = parseThickness(args[5], config);
+                    yield new Ellipsoid(rx, ry, rz, true, thickness);
+                }
+                
                 default -> {
                     msg.sendError(player, "Unknown shape: " + cmd);
                     msg.sendInfo(player, "Use /mct help for a list of shapes.");
@@ -885,9 +1097,6 @@ public class MCToolsCommand implements CommandExecutor {
         }
     }
 
-    /**
-     * Parses block data from a string.
-     */
     private BlockData parseBlockData(String input) {
         try {
             Material material = Material.matchMaterial(input);
@@ -908,12 +1117,9 @@ public class MCToolsCommand implements CommandExecutor {
         }
     }
 
-    /**
-     * Suggests similar block names.
-     */
     private void suggestBlock(Player player, String input) {
         String lower = input.toLowerCase().replace("minecraft:", "");
-        
+
         List<String> suggestions = new ArrayList<>();
         for (Material mat : Material.values()) {
             if (mat.isBlock() && mat.name().toLowerCase().contains(lower)) {
@@ -972,304 +1178,291 @@ public class MCToolsCommand implements CommandExecutor {
         return size;
     }
 
+    private int parseThickness(String value, ConfigManager config) {
+        int thickness = parseInt(value, "thickness");
+        int max = config.getMaxThickness();
+        if (thickness > max) {
+            throw new IllegalArgumentException("Thickness " + thickness + " exceeds maximum of " + max);
+        }
+        return thickness;
+    }
+
     /**
-     * Sends the main help message with colored parameters.
+     * Sends a detailed, color-coded server performance report to the player.
+     * Shows real-time metrics and historical averages over multiple time windows.
      */
+    private void sendPerformanceReport(Player player) {
+        MessageUtil msg = plugin.getMessageUtil();
+        PerformanceMonitor perf = plugin.getPerformanceMonitor();
+
+        // ── Header ──
+        player.sendMessage(msg.parse(""));
+        player.sendMessage(msg.parse("<gradient:#10b981:#059669><bold>━━━ Server Performance ━━━</bold></gradient>"));
+        player.sendMessage(msg.parse(""));
+
+        // ── Current real-time status ──
+        player.sendMessage(msg.parse("<#f97316><bold>▸ Real-time</bold></#f97316>"));
+        msg.sendRaw(player, perf.getFullPerformanceSummaryMiniMessage());
+        player.sendMessage(msg.parse(""));
+
+        // ── Historical windows ──
+        long uptime = perf.getUptimeSeconds();
+        player.sendMessage(msg.parse("<#3b82f6><bold>▸ Historical Averages</bold></#3b82f6> <dark_gray>(uptime: " + formatUptime(uptime) + ")</dark_gray>"));
+
+        // Define windows: label, seconds
+        String[][] windows = {
+                {"10s", "10"},
+                {"1m", "60"},
+                {"10m", "600"},
+                {"30m", "1800"},
+                {"1h", "3600"}
+        };
+
+        for (String[] w : windows) {
+            String label = w[0];
+            int seconds = Integer.parseInt(w[1]);
+            PerformanceMonitor.WindowAverage avg = perf.getWindowAverage(label, seconds);
+
+            if (avg == null || avg.sampleCount() < 2) {
+                player.sendMessage(msg.parse(
+                        "  <gray>" + padRight(label, 4) + "</gray> <dark_gray>│</dark_gray> <dark_gray><italic>not enough data</italic></dark_gray>"));
+            } else {
+                String tpsC = colorForTps(avg.avgTps());
+                String msptC = colorForMspt(avg.avgMspt());
+                String ramC = colorForRam(avg.avgRamPercent());
+                String bptC = colorForBpt(avg.avgBpt());
+                int ramPct = (int) (avg.avgRamPercent() * 100);
+
+                player.sendMessage(msg.parse(
+                        "  <white><bold>" + padRight(label, 4) + "</bold></white> <dark_gray>│</dark_gray>"
+                                + " <gray>TPS:</gray> <" + tpsC + ">" + String.format("%.1f", avg.avgTps()) + "</" + tpsC + ">"
+                                + " <dark_gray>│</dark_gray>"
+                                + " <gray>MSPT:</gray> <" + msptC + ">" + String.format("%.1f", avg.avgMspt()) + "ms</" + msptC + ">"
+                                + " <dark_gray>│</dark_gray>"
+                                + " <gray>RAM:</gray> <" + ramC + ">" + ramPct + "%</" + ramC + ">"
+                                + " <dark_gray>│</dark_gray>"
+                                + " <gray>Speed:</gray> <" + bptC + ">" + avg.avgBpt() + "</" + bptC + "> <gray>b/t</gray>"
+                                + " <dark_gray>(" + avg.sampleCount() + " samples)</dark_gray>"
+                ));
+            }
+        }
+
+        // ── RAM details ──
+        player.sendMessage(msg.parse(""));
+        player.sendMessage(msg.parse("<#a855f7><bold>▸ Memory</bold></#a855f7>"
+                + " <gray>" + perf.getUsedMemoryMB() + "</gray><dark_gray>/</dark_gray><white>" + perf.getMaxMemoryMB() + " MB</white>"
+                + " " + perf.getRamStatusMiniMessage()));
+
+        // ── Bukkit TPS ──
+        double[] bukkitTps = org.bukkit.Bukkit.getTPS();
+        player.sendMessage(msg.parse("<#10b981><bold>▸ Bukkit TPS</bold></#10b981>"
+                + " <gray>1m:</gray> <" + colorForTps(bukkitTps[0]) + ">" + String.format("%.2f", bukkitTps[0]) + "</" + colorForTps(bukkitTps[0]) + ">"
+                + " <dark_gray>│</dark_gray>"
+                + " <gray>5m:</gray> <" + colorForTps(bukkitTps[1]) + ">" + String.format("%.2f", bukkitTps[1]) + "</" + colorForTps(bukkitTps[1]) + ">"
+                + " <dark_gray>│</dark_gray>"
+                + " <gray>15m:</gray> <" + colorForTps(bukkitTps[2]) + ">" + String.format("%.2f", bukkitTps[2]) + "</" + colorForTps(bukkitTps[2]) + ">"));
+
+        player.sendMessage(msg.parse(""));
+    }
+
+    // ── Helper methods for performance report formatting ──
+
+    private static String colorForTps(double tps) {
+        if (tps >= 18.0) return "green";
+        if (tps >= 15.0) return "yellow";
+        if (tps >= 12.0) return "gold";
+        return "red";
+    }
+
+    private static String colorForMspt(double mspt) {
+        if (mspt <= 30.0) return "green";
+        if (mspt <= 45.0) return "yellow";
+        if (mspt <= 50.0) return "gold";
+        return "red";
+    }
+
+    private static String colorForRam(double pct) {
+        if (pct >= 0.92) return "dark_red";
+        if (pct >= 0.85) return "red";
+        if (pct >= 0.75) return "gold";
+        return "green";
+    }
+
+    private static String colorForBpt(int bpt) {
+        if (bpt >= 1000) return "green";
+        if (bpt >= 200) return "yellow";
+        if (bpt >= 50) return "gold";
+        return "red";
+    }
+
+    private static String padRight(String s, int n) {
+        return String.format("%-" + n + "s", s);
+    }
+
+    private static String formatUptime(long seconds) {
+        if (seconds < 60) return seconds + "s";
+        if (seconds < 3600) return (seconds / 60) + "m " + (seconds % 60) + "s";
+        long h = seconds / 3600;
+        long m = (seconds % 3600) / 60;
+        return h + "h " + m + "m";
+    }
+
     private void sendHelp(Player player) {
         MessageUtil msg = plugin.getMessageUtil();
         msg.sendHelpHeader(player);
-        
-        // Color legend
-        player.sendMessage(msg.parse("<gray>Colors: " +
-                "<" + MessageUtil.CMD_COLOR + ">cmd</" + MessageUtil.CMD_COLOR + "> " +
-                "<" + MessageUtil.BLOCK_COLOR + ">block</" + MessageUtil.BLOCK_COLOR + "> " +
-                "<" + MessageUtil.RADIUS_COLOR + ">radius</" + MessageUtil.RADIUS_COLOR + "> " +
-                "<" + MessageUtil.HEIGHT_COLOR + ">height</" + MessageUtil.HEIGHT_COLOR + "> " +
-                "<" + MessageUtil.THICK_COLOR + ">thick</" + MessageUtil.THICK_COLOR + "></gray><newline>"));
-        
+
         // 2D Shapes
-        player.sendMessage(msg.parse("<" + MessageUtil.BLOCK_COLOR + "><bold>2D Shapes (Flat):</bold></" + MessageUtil.BLOCK_COLOR + ">"));
-        
-        // Circle
-        player.sendMessage(msg.parse(msg.buildSyntax("mct cir", "<block>", "<radius>") + 
-                " <dark_gray>-</dark_gray> <gray>Filled circle</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hcir", "<block>", "<radius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow circle</gray>"));
-        
-        // Square
-        player.sendMessage(msg.parse(msg.buildSyntax("mct sq", "<block>", "<size>") + 
-                " <dark_gray>-</dark_gray> <gray>Filled square</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hsq", "<block>", "<size>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow square</gray>"));
-        
-        // Rectangle
-        player.sendMessage(msg.parse(msg.buildSyntax("mct rect", "<block>", "<radiusX>", "<radiusZ>", "[cornerR]") + 
-                " <dark_gray>-</dark_gray> <gray>Rectangle</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hrect", "<block>", "<radiusX>", "<radiusZ>", "[cornerR]", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow rect</gray>"));
-        
-        // Ellipse
-        player.sendMessage(msg.parse(msg.buildSyntax("mct ell", "<block>", "<radiusX>", "<radiusZ>") + 
-                " <dark_gray>-</dark_gray> <gray>Ellipse</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hell", "<block>", "<radiusX>", "<radiusZ>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow ellipse</gray>"));
-        
-        // Polygon
-        player.sendMessage(msg.parse(msg.buildSyntax("mct poly", "<block>", "<radius>", "<sides>") + 
-                " <dark_gray>-</dark_gray> <gray>Polygon (3-12)</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hpoly", "<block>", "<radius>", "<sides>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow polygon</gray>"));
-        
-        // Other 2D
-        player.sendMessage(msg.parse(msg.buildSyntax("mct star", "<block>", "<radius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>5-pointed star</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct line", "<block>", "<length>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Straight line</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct spi", "<block>", "<radius>", "<turns>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Flat spiral</gray>"));
-        
+        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>2D Shapes:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct cir <block> <radius>") + " <dark_gray>-</dark_gray> <gray>Circle</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct sq <block> <size>") + " <dark_gray>-</dark_gray> <gray>Square</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct rect <block> <radiusX> <radiusZ> [cornerRadius]") + " <dark_gray>-</dark_gray> <gray>Rectangle</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct ell <block> <radiusX> <radiusZ>") + " <dark_gray>-</dark_gray> <gray>Ellipse</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct poly <block> <radius> <sides>") + " <dark_gray>-</dark_gray> <gray>Polygon (3-12 sides)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct star <block> <radius> <thickness>") + " <dark_gray>-</dark_gray> <gray>Star</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct line <block> <length> <thickness>") + " <dark_gray>-</dark_gray> <gray>Line</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct spi <block> <radius> <turns> <thickness>") + " <dark_gray>-</dark_gray> <gray>Spiral</gray>"));
+
         // 3D Shapes
         player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>3D Shapes:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
-        
-        // Sphere
-        player.sendMessage(msg.parse(msg.buildSyntax("mct sph", "<block>", "<radius>") + 
-                " <dark_gray>-</dark_gray> <gray>Sphere</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hsph", "<block>", "<radius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow sphere</gray>"));
-        
-        // Dome
-        player.sendMessage(msg.parse(msg.buildSyntax("mct dome", "<block>", "<radius>") + 
-                " <dark_gray>-</dark_gray> <gray>Dome</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hdome", "<block>", "<radius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow dome</gray>"));
-        
-        // Cylinder
-        player.sendMessage(msg.parse(msg.buildSyntax("mct cyl", "<block>", "<height>", "<radius>") + 
-                " <dark_gray>-</dark_gray> <gray>Cylinder</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hcyl", "<block>", "<height>", "<radius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow cylinder</gray>"));
-        
-        // Cone
-        player.sendMessage(msg.parse(msg.buildSyntax("mct cone", "<block>", "<height>", "<radius>") + 
-                " <dark_gray>-</dark_gray> <gray>Cone</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hcone", "<block>", "<height>", "<radius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow cone</gray>"));
-        
-        // Pyramid
-        player.sendMessage(msg.parse(msg.buildSyntax("mct pyr", "<block>", "<height>", "<radius>") + 
-                " <dark_gray>-</dark_gray> <gray>Pyramid</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hpyr", "<block>", "<height>", "<radius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow pyramid</gray>"));
-        
-        // Arch
-        player.sendMessage(msg.parse(msg.buildSyntax("mct arch", "<block>", "<legHeight>", "<radius>", "<width>") + 
-                " <dark_gray>-</dark_gray> <gray>Arch</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct harch", "<block>", "<legHeight>", "<radius>", "<width>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow arch</gray>"));
-        
-        // Torus
-        player.sendMessage(msg.parse(msg.buildSyntax("mct tor", "<block>", "<majorRadius>", "<minorRadius>") + 
-                " <dark_gray>-</dark_gray> <gray>Torus (donut)</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct htor", "<block>", "<majorRadius>", "<minorRadius>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Hollow torus</gray>"));
-        
-        // Wall
-        player.sendMessage(msg.parse(msg.buildSyntax("mct wall", "<block>", "<width>", "<height>", "<thickness>") + 
-                " <dark_gray>-</dark_gray> <gray>Wall</gray>"));
-        
-        // Helix
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hel", "<block>", "<height>", "<radius>", "<turns>", "<thickness>") +
-                " <dark_gray>-</dark_gray> <gray>Helix (3D spiral)</gray>"));
-
-        // Ellipsoid
-        player.sendMessage(msg.parse(msg.buildSyntax("mct ellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>") +
-                " <dark_gray>-</dark_gray> <gray>Ellipsoid</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>", "<thickness>") +
-                " <dark_gray>-</dark_gray> <gray>Hollow ellipsoid</gray>"));
-
-        // Tube
-        player.sendMessage(msg.parse(msg.buildSyntax("mct tube", "<block>", "<height>", "<radius>", "<innerRadius>") +
-                " <dark_gray>-</dark_gray> <gray>Tube (pipe)</gray>"));
-
-        // Capsule
-        player.sendMessage(msg.parse(msg.buildSyntax("mct capsule", "<block>", "<radius>", "<height>") +
-                " <dark_gray>-</dark_gray> <gray>Capsule (pill)</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct hcapsule", "<block>", "<radius>", "<height>", "<thickness>") +
-                " <dark_gray>-</dark_gray> <gray>Hollow capsule</gray>"));
-
-        // Procedural Generation
-        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Procedural Generation:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct tree", "<woodType>", "[seed:] [th:] [tr:] [bd:] [fd:] [fr:]") +
-                " <dark_gray>-</dark_gray> <gray>Procedural tree</gray>"));
-        player.sendMessage(msg.parse("<gray>  Flags: seed: th: tr: bd: fd: fr: -roots -special</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct sph <block> <radius>") + " <dark_gray>-</dark_gray> <gray>Sphere</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct dome <block> <radius>") + " <dark_gray>-</dark_gray> <gray>Dome (half sphere)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct cyl <block> <radius> <height>") + " <dark_gray>-</dark_gray> <gray>Cylinder</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct cone <block> <radius> <height>") + " <dark_gray>-</dark_gray> <gray>Cone</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct pyr <block> <base> <height>") + " <dark_gray>-</dark_gray> <gray>Pyramid</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct arch <block> <width> <height> <thickness>") + " <dark_gray>-</dark_gray> <gray>Arch</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct torus <block> <majorRadius> <minorRadius>") + " <dark_gray>-</dark_gray> <gray>Torus (donut)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct helix <block> <height> <radius> <turns> <thickness>") + " <dark_gray>-</dark_gray> <gray>Helix (3D spiral)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct wall <block> <width> <height> <thickness>") + " <dark_gray>-</dark_gray> <gray>Wall</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct tube <block> <outerR> <innerR> <height>") + " <dark_gray>-</dark_gray> <gray>Tube (hollow cylinder)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct capsule <block> <radius> <height>") + " <dark_gray>-</dark_gray> <gray>Capsule</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct ellipsoid <block> <rX> <rY> <rZ>") + " <dark_gray>-</dark_gray> <gray>Ellipsoid</gray>"));
 
         // Gradient Shapes
-        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Gradient Shapes:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
-        player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + ">/mct g&lt;shape&gt;</" + MessageUtil.CMD_COLOR + "> "
-            + "<" + MessageUtil.BLOCK_COLOR + ">&lt;#hex,#hex,...&gt;</" + MessageUtil.BLOCK_COLOR + "> "
-            + "<" + MessageUtil.RADIUS_COLOR + ">&lt;params&gt;</" + MessageUtil.RADIUS_COLOR + "> "
-            + "<" + MessageUtil.OPTIONAL_COLOR + ">[-dir y|x|z|radial] [-interp oklab|lab|rgb|hsl] [-unique]</" + MessageUtil.OPTIONAL_COLOR + ">"));
-        player.sendMessage(msg.parse("<dark_gray>  Example: /mct gsph #ff0000,#0000ff 12</dark_gray>"));
-        player.sendMessage(msg.parse("<gray>  Creates shapes with color gradients using auto-matched blocks</gray>"));
+        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Gradient Shapes:</bold></" + MessageUtil.BLOCK_COLOR + "> <gray>(prefix with 'g')</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct g<shape> <#hex1,#hex2,...> <params> [-dir y|x|z|radial] [-interp oklab|lab|rgb|hsl]")));
+        player.sendMessage(msg.parse("<gray>Example: </gray><white>/mct gsph #ff0000,#0000ff 20 -dir radial</white>"));
 
-        // Admin Commands
-        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Admin Commands:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct undo", "[count]") + " <dark_gray>-</dark_gray> <gray>Undo operations (up to 1000)</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct redo", "[count]") + " <dark_gray>-</dark_gray> <gray>Redo undone operations</gray>"));
+        // Tree Generator
+        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Tree Generator:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct tree <woodType> [options]") + " <dark_gray>-</dark_gray> <gray>Generate custom tree</gray>"));
+        player.sendMessage(msg.parse("<gray>Options: seed: th: tr: bd: fd: fr: -roots -special</gray>"));
+        player.sendMessage(msg.parse("<gray>Wood types: oak, spruce, birch, jungle, acacia, dark_oak, mangrove, cherry, crimson, warped</gray>"));
+
+        // Utility
+        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Utility:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct center") + " <dark_gray>-</dark_gray> <gray>Auto-detect nearby structure center</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct performance") + " <dark_gray>-</dark_gray> <gray>Server performance report (TPS, MSPT, RAM)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct undo [count]") + " <dark_gray>-</dark_gray> <gray>Undo last operation(s)</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct redo [count]") + " <dark_gray>-</dark_gray> <gray>Redo undone operation(s)</gray>"));
+
+        // Admin
+        player.sendMessage(msg.parse("<newline><" + MessageUtil.BLOCK_COLOR + "><bold>Admin:</bold></" + MessageUtil.BLOCK_COLOR + ">"));
         player.sendMessage(msg.parse(msg.buildSyntax("mct cancel") + " <dark_gray>-</dark_gray> <gray>Cancel current operation</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct pause") + " <dark_gray>-</dark_gray> <gray>Pause current operation</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct resume") + " <dark_gray>-</dark_gray> <gray>Resume paused operation</gray>"));
         player.sendMessage(msg.parse(msg.buildSyntax("mct reload") + " <dark_gray>-</dark_gray> <gray>Reload configuration</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct help", "[shape]") + " <dark_gray>-</dark_gray> <gray>Show help</gray>"));
-        player.sendMessage(msg.parse(msg.buildSyntax("mct info") + " <dark_gray>-</dark_gray> <gray>Plugin information</gray>"));
+        player.sendMessage(msg.parse(msg.buildSyntax("mct info") + " <dark_gray>-</dark_gray> <gray>Plugin info</gray>"));
     }
 
-    /**
-     * Sends detailed help for a specific shape.
-     */
     private void sendShapeHelp(Player player, String shape) {
         MessageUtil msg = plugin.getMessageUtil();
-        msg.sendHelpHeader(player);
+        String shapeHelp = switch (shape.toLowerCase()) {
+            case "cir", "circle" -> "Circle: /mct cir <block> <radius>\nCreates a filled circle at your position.";
+            case "sq", "square" -> "Square: /mct sq <block> <size>\nCreates a filled square at your position.";
+            case "rect", "rectangle" -> "Rectangle: /mct rect <block> <radiusX> <radiusZ> [cornerRadius]\nCreates a rectangle. Optional corner radius for rounded corners.";
+            case "ell", "ellipse" -> "Ellipse: /mct ell <block> <radiusX> <radiusZ>\nCreates an ellipse with different X and Z radii.";
+            case "poly", "polygon" -> "Polygon: /mct poly <block> <radius> <sides>\nCreates a regular polygon (3-12 sides).";
+            case "star" -> "Star: /mct star <block> <radius> <thickness>\nCreates a 5-pointed star.";
+            case "line" -> "Line: /mct line <block> <length> <thickness>\nCreates a line in the direction you're facing.";
+            case "spi", "spiral" -> "Spiral: /mct spi <block> <radius> <turns> <thickness>\nCreates a 2D spiral.";
+            case "sph", "sphere" -> "Sphere: /mct sph <block> <radius>\nCreates a filled sphere.";
+            case "dome" -> "Dome: /mct dome <block> <radius>\nCreates a half-sphere (dome).";
+            case "cyl", "cylinder" -> "Cylinder: /mct cyl <block> <radius> <height>\nCreates a filled cylinder.";
+            case "cone" -> "Cone: /mct cone <block> <radius> <height>\nCreates a cone.";
+            case "pyr", "pyramid" -> "Pyramid: /mct pyr <block> <base> <height>\nCreates a square-based pyramid.";
+            case "arch" -> "Arch: /mct arch <block> <width> <height> <thickness>\nCreates an arch.";
+            case "torus" -> "Torus: /mct torus <block> <majorRadius> <minorRadius>\nCreates a donut shape.";
+            case "helix" -> "Helix: /mct helix <block> <radius> <height> <turns>\nCreates a 3D spiral.";
+            case "wall" -> "Wall: /mct wall <block> <length> <height>\nCreates a wall.";
+            case "tube" -> "Tube: /mct tube <block> <outerRadius> <innerRadius> <height>\nCreates a hollow cylinder.";
+            case "capsule" -> "Capsule: /mct capsule <block> <radius> <height>\nCreates a capsule (cylinder with dome ends).";
+            case "ellipsoid" -> "Ellipsoid: /mct ellipsoid <block> <radiusX> <radiusY> <radiusZ>\nCreates an ellipsoid with different radii.";
+            case "tree" -> "Tree: /mct tree <woodType> [options]\nGenerates a custom tree.\nOptions: seed: th: tr: bd: fd: fr: -roots -special";
+            default -> null;
+        };
 
-        switch (shape.toLowerCase()) {
-            case "cir", "circle", "hcir" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Circle</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a flat circle on the ground.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct cir", "<block>", "<radius>")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hcir", "<block>", "<radius>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct cir stone 10</dark_gray>"));
+        if (shapeHelp != null) {
+            for (String line : shapeHelp.split("\n")) {
+                msg.sendInfo(player, line);
             }
-            case "sq", "square", "hsq" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Square</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a flat square. Size is the full side length.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct sq", "<block>", "<size>")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hsq", "<block>", "<size>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct sq oak_planks 15</dark_gray>"));
-            }
-            case "rect", "rectangle", "hrect" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Rectangle</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a rectangle. radiusX/Z are half-dimensions.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct rect", "<block>", "<radiusX>", "<radiusZ>", "[cornerRadius]")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hrect", "<block>", "<radiusX>", "<radiusZ>", "[cornerRadius]", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct hrect stone 51 42 7 3</dark_gray>"));
-            }
-            case "sph", "sphere", "hsph" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Sphere</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a 3D sphere centered on you.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct sph", "<block>", "<radius>")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hsph", "<block>", "<radius>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct hsph glass 15 1</dark_gray>"));
-            }
-            case "cyl", "cylinder", "hcyl" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Cylinder</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a vertical cylinder.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct cyl", "<block>", "<height>", "<radius>")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hcyl", "<block>", "<height>", "<radius>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct hcyl stone_bricks 30 10 2</dark_gray>"));
-            }
-            case "tor", "torus", "htor" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Torus</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a donut shape.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct tor", "<block>", "<majorRadius>", "<minorRadius>")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct htor", "<block>", "<majorRadius>", "<minorRadius>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><gray>majorRadius = distance to tube center</gray>"));
-                player.sendMessage(msg.parse("<gray>minorRadius = tube radius</gray>"));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct tor gold_block 15 5</dark_gray>"));
-            }
-            case "wall" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Wall</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a solid wall.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct wall", "<block>", "<width>", "<height>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct wall stone_bricks 20 10 2</dark_gray>"));
-            }
-            case "hel", "helix" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Helix</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a 3D spiral (helix).</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hel", "<block>", "<height>", "<radius>", "<turns>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct hel gold_block 50 10 5 2</dark_gray>"));
-            }
-            case "tree" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Procedural Tree</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Generates a procedural tree with trunk, branches, foliage, and optional roots.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct tree", "<woodType>", "[params...]")));
-                player.sendMessage(msg.parse("<newline><gray>Wood types: oak, spruce, birch, jungle, acacia, dark_oak, mangrove, cherry, crimson, warped</gray>"));
-                player.sendMessage(msg.parse("<newline><gray>Parameters (key:value):</gray>"));
-                player.sendMessage(msg.parse("<gray>  seed:<1-99999> random seed (default: random)</gray>"));
-                player.sendMessage(msg.parse("<gray>  th:<4-40> trunk height (default: 12)</gray>"));
-                player.sendMessage(msg.parse("<gray>  tr:<1-6> trunk radius (default: 2)</gray>"));
-                player.sendMessage(msg.parse("<gray>  bd:<0.1-1.0> branch density (default: 0.7)</gray>"));
-                player.sendMessage(msg.parse("<gray>  fd:<0.1-1.0> foliage density (default: 0.8)</gray>"));
-                player.sendMessage(msg.parse("<gray>  fr:<2-15> foliage radius (default: 6)</gray>"));
-                player.sendMessage(msg.parse("<gray>  -roots enable root generation</gray>"));
-                player.sendMessage(msg.parse("<gray>  -special use fences for thin branches, slabs for root tips</gray>"));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct tree oak seed:12345 th:15 bd:0.8 fd:0.9 fr:8 -roots</dark_gray>"));
-            }
-            case "ellipsoid", "hellipsoid" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Ellipsoid</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates an ellipsoid with independent radii per axis.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct ellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hellipsoid", "<block>", "<radiusX>", "<radiusY>", "<radiusZ>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct ellipsoid stone 10 15 10</dark_gray>"));
-            }
-            case "tube" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Tube</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a tube (pipe) with inner and outer radius.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct tube", "<block>", "<height>", "<radius>", "<innerRadius>")));
-                player.sendMessage(msg.parse("<newline><gray>innerRadius must be less than radius</gray>"));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct tube stone_bricks 20 10 7</dark_gray>"));
-            }
-            case "capsule", "hcapsule" -> {
-                player.sendMessage(msg.parse("<" + MessageUtil.CMD_COLOR + "><bold>Capsule</bold></" + MessageUtil.CMD_COLOR + ">"));
-                player.sendMessage(msg.parse("<gray>Creates a capsule (pill shape) with hemispherical caps.</gray><newline>"));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct capsule", "<block>", "<radius>", "<height>")));
-                player.sendMessage(msg.parse(msg.buildSyntax("mct hcapsule", "<block>", "<radius>", "<height>", "<thickness>")));
-                player.sendMessage(msg.parse("<newline><gray>height must be at least 2x radius</gray>"));
-                player.sendMessage(msg.parse("<newline><dark_gray>Example: /mct capsule white_concrete 5 20</dark_gray>"));
-            }
-            default -> {
-                msg.sendError(player, "Unknown shape: " + shape);
-                msg.sendInfo(player, "Use /mct help for a list of shapes.");
-            }
+        } else {
+            msg.sendError(player, "Unknown shape: " + shape);
+            msg.sendInfo(player, "Use /mct help for a list of shapes.");
         }
     }
 
-    /**
-     * Sends plugin information to the player.
-     */
     private void sendInfo(Player player) {
         MessageUtil msg = plugin.getMessageUtil();
-        String version = plugin.getDescription().getVersion();
-        
-        // Header with gradient
-        player.sendMessage(msg.parse("<newline><gradient:#00d4ff:#0099cc><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient>"));
+
         player.sendMessage(msg.parse(""));
-        
-        // Logo/Title
-        player.sendMessage(msg.parse("        <gradient:#00d4ff:#3b82f6><bold>⬡ MCTools ⬡</bold></gradient>"));
-        player.sendMessage(msg.parse("        <gray>Advanced Shape Generation</gray>"));
+        player.sendMessage(msg.parse("        <gradient:#FF4D4D:#FF8C42:#FFCC00:#4ECDC4:#5865F2><bold>M C T O O L S</bold></gradient>"));
+        player.sendMessage(msg.parse("            <gray>version</gray> <white>1.2.0</white>"));
         player.sendMessage(msg.parse(""));
-        
-        // Version
-        player.sendMessage(msg.parse("  <" + MessageUtil.CMD_COLOR + ">▸</" + MessageUtil.CMD_COLOR + "> <gray>Version:</gray> <white>" + version + "</white>"));
-        
-        // Creator
-        player.sendMessage(msg.parse("  <" + MessageUtil.BLOCK_COLOR + ">▸</" + MessageUtil.BLOCK_COLOR + "> <gray>Created by:</gray> <click:open_url:'https://penguinstudios.eu/'><hover:show_text:'<gray>Visit PenguinStudios!</gray>'><gradient:#00d4ff:#5bcefa><bold>PenguinStudios</bold></gradient></hover></click>"));
-        
-        // Website
+        player.sendMessage(msg.parse("   <dark_gray>|</dark_gray> <dark_red><bold><click:open_url:'https://github.com/PenguinStudiosOrganization/MCTools/releases/'><hover:show_text:'<white>Open GitHub Releases</white>'>[GitHub]</hover></click></bold></dark_red> " +
+                                     "<dark_gray>|</dark_gray> <#5865F2><bold><click:open_url:'https://discord.penguinstudios.eu/'><hover:show_text:'<white>Join our Discord</white>'>[Discord]</hover></click></bold></#5865F2> " +
+                                     "<dark_gray>|</dark_gray> <green><bold><click:open_url:'https://mcutils.net/'><hover:show_text:'<white>Visit MCUtils</white>'>[MCUtils]</hover></click></bold></green> " +
+                                     "<dark_gray>|</dark_gray>"));
+        player.sendMessage(msg.parse("   <dark_gray>|</dark_gray> <aqua><bold><click:open_url:'https://penguinstudios.eu/'><hover:show_text:'<white>Visit PenguinStudios</white>'>[PenguinStudios]</hover></click></bold></aqua> <dark_gray>|</dark_gray>"));
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("  <" + MessageUtil.HEIGHT_COLOR + ">▸</" + MessageUtil.HEIGHT_COLOR + "> <gray>Website:</gray> <click:open_url:'https://mcutils.net/'><hover:show_text:'<gray>Click to visit!</gray>'><#3b82f6><underlined>mcutils.net</underlined></#3b82f6></hover></click>"));
-        
-        // GitHub/Download
-        player.sendMessage(msg.parse("  <" + MessageUtil.RADIUS_COLOR + ">▸</" + MessageUtil.RADIUS_COLOR + "> <gray>Download:</gray> <click:open_url:'https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release'><hover:show_text:'<gray>Click to download!</gray>'><#00d4ff><underlined>GitHub Releases</underlined></#00d4ff></hover></click>"));
-        
-        // Spacer
+        player.sendMessage(msg.parse("   <dark_gray><italic>Not affiliated with Mojang AB or Microsoft.</italic></dark_gray>"));
         player.sendMessage(msg.parse(""));
+    }
+    
+    /**
+     * Gives the player a Terrain Brush wand (bamboo item).
+     */
+    private void giveTerrainWand(Player player) {
+        MessageUtil msg = plugin.getMessageUtil();
         
-        // Thank you message
-        player.sendMessage(msg.parse("  <gradient:#00d4ff:#5bcefa>♥</gradient> <gray>Thank you for using</gray> <gradient:#00d4ff:#3b82f6><bold>MCTools</bold></gradient><gray>!</gray>"));
-        player.sendMessage(msg.parse("    <dark_gray>Your support helps us create better tools</dark_gray>"));
-        player.sendMessage(msg.parse("    <dark_gray>for the Minecraft building community.</dark_gray>"));
+        ItemStack wand = new ItemStack(Material.BAMBOO);
+        ItemMeta meta = wand.getItemMeta();
         
-        // Footer
-        player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("<gradient:#00d4ff:#0099cc><bold>━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</bold></gradient><newline>"));
+        if (meta != null) {
+            // Set display name with gradient
+            meta.setDisplayName("§b§l⛰ §fTerrain Brush §7§o(MCTools)");
+            
+            // Set lore with detailed description
+            List<String> lore = new ArrayList<>();
+            lore.add("");
+            lore.add("§7━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            lore.add("§f§lTERRAIN SCULPTING TOOL");
+            lore.add("§7━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            lore.add("");
+            lore.add("§e⚡ §fRight-click §7to sculpt terrain");
+            lore.add("§e⚡ §fLeft-click §7to open settings GUI");
+            lore.add("");
+            lore.add("§b§lFeatures:");
+            lore.add("§7• §fHeightmap-based terrain generation");
+            lore.add("§7• §fRaise, Lower, Smooth, Flatten modes");
+            lore.add("§7• §fAdjustable size, intensity & height");
+            lore.add("§7• §fPreview before applying changes");
+            lore.add("§7• §fFull undo/redo support");
+            lore.add("§7━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+            
+            meta.setLore(lore);
+            
+            // Add enchant glow effect
+            meta.addEnchant(Enchantment.MENDING, 1, true);
+            meta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            meta.addItemFlags(ItemFlag.HIDE_ATTRIBUTES);
+            
+            wand.setItemMeta(meta);
+        }
+        
+        // Give item to player
+        player.getInventory().addItem(wand);
+        
+        msg.sendInfo(player, "You received the Terrain Brush Wand!");
+        msg.sendInfo(player, "Right-click to sculpt, Left-click for settings GUI.");
     }
 }

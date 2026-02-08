@@ -51,6 +51,9 @@ public class Torus extends Shape3D {
         double centerZ = center.getBlockZ();
 
         int totalRadius = majorRadius + minorRadius;
+        // Ensure thickness doesn't exceed minorRadius for hollow torus
+        int effectiveThickness = hollow ? Math.min(thickness, minorRadius) : thickness;
+        double innerMinorRadius = Math.max(0, minorRadius - effectiveThickness);
 
         for (int x = -totalRadius; x <= totalRadius; x++) {
             for (int y = -minorRadius; y <= minorRadius; y++) {
@@ -62,7 +65,11 @@ public class Torus extends Shape3D {
                     double distToRing = Math.sqrt(Math.pow(distXZ - majorRadius, 2) + y * y);
 
                     if (hollow) {
-                        if (distToRing <= minorRadius && distToRing > minorRadius - thickness) {
+                        // Bottom layer (y == -minorRadius) is filled for hollow torus
+                        boolean isBottom = (y == -minorRadius);
+                        boolean isShell = distToRing <= minorRadius && distToRing > innerMinorRadius;
+                        boolean isFilled = distToRing <= minorRadius;
+                        if (isBottom ? isFilled : isShell) {
                             // Offset Y so torus sits on ground
                             addBlock(blocks, world, centerX, centerY, centerZ, x, y + minorRadius, z);
                         }

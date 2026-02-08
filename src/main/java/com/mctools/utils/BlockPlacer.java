@@ -1,12 +1,25 @@
 package com.mctools.utils;
 
 import com.mctools.MCTools;
+import com.sk89q.worldedit.WorldEdit;
+import com.sk89q.worldedit.WorldEditException;
+import com.sk89q.worldedit.bukkit.BukkitAdapter;
+import com.sk89q.worldedit.math.BlockVector3;
+import com.sk89q.worldedit.world.block.BlockState;
+import com.sk89q.worldedit.EditSession;
+import com.sk89q.worldedit.EditSessionBuilder;
+import com.sk89q.worldedit.LocalSession;
+import com.sk89q.worldedit.bukkit.BukkitPlayer;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
 import org.bukkit.Sound;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
@@ -14,22 +27,11 @@ import org.bukkit.scheduler.BukkitTask;
 import java.util.*;
 
 /**
- * World-edit execution engine for MCTools.
+ * Block placement engine for MCTools.
  *
- * <p>Responsibilities:
- * <ul>
- *   <li>Place a list/map of blocks, optionally after a preview phase.</li>
- *   <li>Adapt placement speed based on server performance (TPS/RAM).</li>
- *   <li>Integrate with {@link UndoManager} by storing original block data.</li>
- *   <li>Provide user feedback (progress/completion) and cancellation controls.</li>
- * </ul>
- *
- * <p>Implementation notes:
- * <ul>
- *   <li>Preview and placement are tracked per-player to avoid overlapping operations.</li>
- *   <li>Placement is performed on the main thread (Bukkit scheduler), chunk-loaded guarded.</li>
- *   <li>When server health drops below safety thresholds, operations are cancelled and restored.</li>
- * </ul>
+ * <p>When WorldEdit/FAWE is present, block edits are executed through WorldEdit
+ * {@link EditSession} so they are recorded in WorldEdit per-player history.
+ * This enables true universal undo via {@code //undo}.</p>
  */
 public class BlockPlacer {
 
@@ -43,13 +45,7 @@ public class BlockPlacer {
         this.previewTasks = new HashMap<>();
     }
 
-    /**
-     * Places blocks with different materials (e.g. trees / multi-block structures).
-     *
-     * <p>This is a convenience wrapper that converts {@link Material} to {@link BlockData}.</p>
-     * Places blocks with different materials (for trees and other multi-block structures).
-
-     */
+    @SuppressWarnings("unused")
     public void placeMultiBlocks(Player player, Map<Location, Material> blocks, String shapeName) {
         Map<Location, BlockData> blockDataMap = new LinkedHashMap<>();
         for (Map.Entry<Location, Material> entry : blocks.entrySet()) {
@@ -58,12 +54,6 @@ public class BlockPlacer {
         placeGradientBlocks(player, blockDataMap, shapeName);
     }
 
-    /**
-     * Places blocks where each position can have a different {@link BlockData}.
-     *
-     * <p>Used by gradient and procedural generators.</p>
-     * Places gradient blocks (different block type per position) with optional preview.
-     */
     public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName) {
         if (blockMap.isEmpty()) {
             plugin.getMessageUtil().sendError(player, "No blocks to place!");
@@ -82,12 +72,7 @@ public class BlockPlacer {
         cancelTask(player);
         cancelPreview(player);
 
-        Map<Location, BlockData> originalBlocks = new LinkedHashMap<>();
-        for (Location loc : blocks) {
-            if (loc.getWorld() != null) {
-                originalBlocks.put(loc.clone(), loc.getBlock().getBlockData().clone());
-            }
-        }
+        Map<Location, BlockData> originalBlocks = captureOriginal(blocks);
 
         teleportAboveStructure(player, blocks);
 
@@ -101,17 +86,12 @@ public class BlockPlacer {
         }
     }
 
-    /**
-     * Places blocks with optional preview animation.
-     * Teleports player above the structure to avoid getting stuck.
-     */
     public void placeBlocks(Player player, List<Location> blocks, BlockData blockData, String shapeName) {
         if (blocks.isEmpty()) {
             plugin.getMessageUtil().sendError(player, "No blocks to place!");
             return;
         }
 
-        // Check if operation is safe to start
         String safetyCheck = plugin.getPerformanceMonitor().checkOperationSafety(blocks.size());
         if (safetyCheck != null) {
             plugin.getMessageUtil().sendError(player, safetyCheck);
@@ -122,19 +102,11 @@ public class BlockPlacer {
         cancelTask(player);
         cancelPreview(player);
 
-        // Store original blocks for undo
-        Map<Location, BlockData> originalBlocks = new LinkedHashMap<>();
-        for (Location loc : blocks) {
-            if (loc.getWorld() != null) {
-                originalBlocks.put(loc.clone(), loc.getBlock().getBlockData().clone());
-            }
-        }
+        Map<Location, BlockData> originalBlocks = captureOriginal(blocks);
 
-        ConfigManager config = plugin.getConfigManager();
-
-        // Calculate highest point and teleport player above it
         teleportAboveStructure(player, blocks);
 
+        ConfigManager config = plugin.getConfigManager();
         if (config.isPreviewEnabled()) {
             PreviewTask previewTask = new PreviewTask(player, blocks, blockData, originalBlocks, shapeName);
             previewTasks.put(player.getUniqueId(), previewTask);
@@ -144,15 +116,22 @@ public class BlockPlacer {
         }
     }
 
-    /**
-     * Teleports the player above the structure to avoid getting stuck inside blocks.
-     */
+    private Map<Location, BlockData> captureOriginal(List<Location> blocks) {
+        Map<Location, BlockData> originalBlocks = new LinkedHashMap<>();
+        for (Location loc : blocks) {
+            if (loc.getWorld() != null) {
+                originalBlocks.put(loc.clone(), loc.getBlock().getBlockData().clone());
+            }
+        }
+        return originalBlocks;
+    }
+
     private void teleportAboveStructure(Player player, List<Location> blocks) {
         if (blocks.isEmpty()) return;
-        
+
         int maxY = Integer.MIN_VALUE;
         double avgX = 0, avgZ = 0;
-        
+
         for (Location loc : blocks) {
             if (loc.getBlockY() > maxY) {
                 maxY = loc.getBlockY();
@@ -160,10 +139,10 @@ public class BlockPlacer {
             avgX += loc.getX();
             avgZ += loc.getZ();
         }
-        
+
         avgX /= blocks.size();
         avgZ /= blocks.size();
-        
+
         Location teleportLoc = new Location(
             player.getWorld(),
             avgX,
@@ -172,18 +151,15 @@ public class BlockPlacer {
             player.getLocation().getYaw(),
             player.getLocation().getPitch()
         );
-        
+
         while (!teleportLoc.getBlock().getType().isAir() && teleportLoc.getY() < player.getWorld().getMaxHeight()) {
             teleportLoc.add(0, 1, 0);
         }
-        
+
         player.teleport(teleportLoc);
         plugin.getMessageUtil().sendInfo(player, "Teleported above the structure.");
     }
 
-    /**
-     * Starts the actual block placement (called after preview or directly).
-     */
     private void startPlacement(Player player, List<Location> blocks, BlockData blockData,
                                 Map<Location, BlockData> originalBlocks, String shapeName) {
         startPlacement(player, blocks, blockData, originalBlocks, shapeName, null);
@@ -193,30 +169,17 @@ public class BlockPlacer {
                                 Map<Location, BlockData> originalBlocks, String shapeName,
                                 Map<Location, BlockData> gradientMap) {
 
-        PerformanceMonitor perfMon = plugin.getPerformanceMonitor();
+        plugin.getMessageUtil().sendInfo(player, "Generating " + formatNumber(blocks.size()) + " blocks...");
 
-        // Start message.
-        plugin.getMessageUtil().sendInfo(player, "Starting generation...");
-        plugin.getMessageUtil().sendInfo(player, "Blocks: " + formatNumber(blocks.size()) + " | " + perfMon.getCompactStatusMiniMessage());
-        plugin.getMessageUtil().sendInfo(player, "<gradient:#10b981:#059669>▶ Starting generation...</gradient>");
-        plugin.getMessageUtil().sendInfo(player, "<dark_gray>┃</dark_gray> <gray>Blocks:</gray> <white>" + formatNumber(blocks.size()) + "</white> <dark_gray>│</dark_gray> " + perfMon.getCompactStatusMiniMessage());
-
-        // Create and start the placement task
         PlacementTask task = new PlacementTask(player, blocks, blockData, originalBlocks, shapeName, gradientMap);
         activeTasks.put(player.getUniqueId(), task);
         task.runTaskTimer(plugin, 0L, 1L);
     }
-    
-    /**
-     * Formats a number with thousands separator.
-     */
+
     private String formatNumber(int number) {
         return String.format("%,d", number);
     }
-    
-    /**
-     * Formats time in a human-readable way.
-     */
+
     private String formatTime(long seconds) {
         if (seconds < 60) {
             return seconds + "s";
@@ -246,10 +209,9 @@ public class BlockPlacer {
     }
 
     public boolean hasActiveTask(Player player) {
-        return activeTasks.containsKey(player.getUniqueId()) || 
-               previewTasks.containsKey(player.getUniqueId());
+        return activeTasks.containsKey(player.getUniqueId()) || previewTasks.containsKey(player.getUniqueId());
     }
-    
+
     public boolean pauseTask(Player player) {
         PlacementTask task = activeTasks.get(player.getUniqueId());
         if (task != null) {
@@ -263,7 +225,7 @@ public class BlockPlacer {
         }
         return false;
     }
-    
+
     public boolean resumeTask(Player player) {
         PlacementTask task = activeTasks.get(player.getUniqueId());
         if (task != null && task.isPaused()) {
@@ -285,14 +247,16 @@ public class BlockPlacer {
             try {
                 Sound sound = Sound.valueOf(config.getCompleteSound());
                 player.playSound(player.getLocation(), sound, 1.0f, 1.0f);
-            } catch (IllegalArgumentException e) {}
+            } catch (IllegalArgumentException ignored) {
+            }
         }
 
         if (config.isParticlesEnabled()) {
             try {
                 Particle particle = Particle.valueOf(config.getParticleType());
                 player.getWorld().spawnParticle(particle, player.getLocation().add(0, 1, 0), 30, 0.5, 0.5, 0.5);
-            } catch (IllegalArgumentException e) {}
+            } catch (IllegalArgumentException ignored) {
+            }
         }
     }
 
@@ -302,12 +266,35 @@ public class BlockPlacer {
             try {
                 Sound sound = Sound.valueOf(config.getErrorSound());
                 player.playSound(player.getLocation(), sound, 1.0f, 1.0f);
-            } catch (IllegalArgumentException e) {}
+            } catch (IllegalArgumentException ignored) {
+            }
         }
     }
 
+    private boolean isWorldEditAvailable() {
+        return Bukkit.getPluginManager().getPlugin("WorldEdit") != null;
+    }
+
+    private EditSession openEditSession(Player player, int expectedChanges) {
+        // Ensure history is recorded for this player
+        BukkitPlayer wePlayer = BukkitAdapter.adapt(player);
+        com.sk89q.worldedit.world.World weWorld = BukkitAdapter.adapt(player.getWorld());
+
+        EditSessionBuilder builder = WorldEdit.getInstance().newEditSessionBuilder();
+        return builder
+            .world(weWorld)
+            .actor(wePlayer)
+            // Let WorldEdit enforce its own limits (max-changes). We also have plugin-side max-blocks.
+            .maxBlocks(expectedChanges)
+            .build();
+    }
+
+    private BlockState toWEBlockState(BlockData data) {
+        return BukkitAdapter.adapt(data);
+    }
+
     /**
-     * Preview task - shows preview blocks for configured duration.
+     * Preview task (Bukkit-side glass preview). Not recorded in WorldEdit history.
      */
     private class PreviewTask {
         private final Player player;
@@ -319,21 +306,28 @@ public class BlockPlacer {
         private BukkitTask countdownTask;
         private BukkitTask previewPlacementTask;
         private int secondsRemaining;
+        private int initialSeconds;
         private boolean cancelled = false;
         private boolean generationStarted = false;
         private boolean paused = false;
+        private BossBar previewBossBar;
 
         public boolean isPaused() { return paused; }
-        public void setPaused(boolean paused) { this.paused = paused; }
+        public void setPaused(boolean paused) { 
+            this.paused = paused;
+            if (paused) {
+                updateBossbarPaused();
+            }
+        }
 
         public PreviewTask(Player player, List<Location> blocks, BlockData finalBlockData,
-                          Map<Location, BlockData> originalBlocks, String shapeName) {
+                           Map<Location, BlockData> originalBlocks, String shapeName) {
             this(player, blocks, finalBlockData, originalBlocks, shapeName, null);
         }
 
         public PreviewTask(Player player, List<Location> blocks, BlockData finalBlockData,
-                          Map<Location, BlockData> originalBlocks, String shapeName,
-                          Map<Location, BlockData> gradientMap) {
+                           Map<Location, BlockData> originalBlocks, String shapeName,
+                           Map<Location, BlockData> gradientMap) {
             this.player = player;
             this.blocks = blocks;
             this.finalBlockData = finalBlockData;
@@ -341,18 +335,65 @@ public class BlockPlacer {
             this.shapeName = shapeName;
             this.gradientMap = gradientMap;
             this.secondsRemaining = plugin.getConfigManager().getPreviewDuration();
+            this.initialSeconds = this.secondsRemaining;
+            createBossbar();
+        }
+        
+        private void createBossbar() {
+            if (!plugin.getConfigManager().isEtaBossbarEnabled()) return;
+            previewBossBar = Bukkit.createBossBar(
+                "§b§l⏳ §f" + shapeName + " §7│ §a" + secondsRemaining + "s §7│ §e" + formatNumber(blocks.size()) + " blocks",
+                BarColor.BLUE,
+                BarStyle.SEGMENTED_10
+            );
+            previewBossBar.setProgress(1.0);
+            previewBossBar.addPlayer(player);
+            previewBossBar.setVisible(true);
+        }
+        
+        private void updateBossbar() {
+            if (previewBossBar == null) return;
+            double progress = Math.max(0.0, (double) secondsRemaining / initialSeconds);
+            previewBossBar.setProgress(progress);
+            
+            // Dynamic icon based on time remaining
+            String icon;
+            if (secondsRemaining <= 2) {
+                icon = "§c§l⚡";
+                previewBossBar.setColor(BarColor.RED);
+            } else if (secondsRemaining <= 3) {
+                icon = "§6§l⏰";
+                previewBossBar.setColor(BarColor.YELLOW);
+            } else {
+                icon = "§b§l⏳";
+                previewBossBar.setColor(BarColor.BLUE);
+            }
+            
+            previewBossBar.setTitle(icon + " §f" + shapeName + " §7│ §a" + secondsRemaining + "s §7│ §e" + formatNumber(blocks.size()) + " blocks");
+        }
+        
+        private void updateBossbarPaused() {
+            if (previewBossBar == null) return;
+            previewBossBar.setTitle("§d§l⏸ §fPAUSED §7│ §f" + shapeName + " §7│ §e" + formatNumber(blocks.size()) + " blocks");
+            previewBossBar.setColor(BarColor.PURPLE);
+        }
+        
+        private void removeBossbar() {
+            if (previewBossBar != null) {
+                previewBossBar.removeAll();
+                previewBossBar = null;
+            }
         }
 
         public void start() {
             ConfigManager config = plugin.getConfigManager();
             Material previewMaterial = config.getPreviewBlock();
-            
+
             plugin.getMessageUtil().sendInfo(player, "Showing preview. Generation in " + secondsRemaining + "s...");
             plugin.getMessageUtil().sendInfo(player, "Use /mct cancel to abort.");
 
             BlockData previewData = previewMaterial.createBlockData();
-            
-            // Place preview blocks quickly
+
             previewPlacementTask = new BukkitRunnable() {
                 int index = 0;
 
@@ -363,7 +404,6 @@ public class BlockPlacer {
                         return;
                     }
 
-                    // Fast preview: complete in ~10 ticks max
                     int blocksPerTick = Math.max(100, (int) Math.ceil(blocks.size() / 10.0));
 
                     int endIndex = Math.min(index + blocksPerTick, blocks.size());
@@ -389,7 +429,6 @@ public class BlockPlacer {
                 }
             }.runTaskTimer(plugin, 0L, 1L);
 
-            // Countdown timer
             countdownTask = new BukkitRunnable() {
                 @Override
                 public void run() {
@@ -397,13 +436,16 @@ public class BlockPlacer {
                         cancelPreviewAndRestore();
                         return;
                     }
-                    
+
                     if (cancelled) {
                         cancel();
                         return;
                     }
                     
-                    // Check server performance during preview
+                    if (paused) {
+                        return;
+                    }
+
                     if (plugin.getPerformanceMonitor().shouldCancelOperation()) {
                         plugin.getMessageUtil().sendError(player, "Operation cancelled due to server overload.");
                         plugin.getMessageUtil().sendInfo(player, plugin.getPerformanceMonitor().getPerformanceStatusMiniMessage());
@@ -412,10 +454,12 @@ public class BlockPlacer {
                     }
 
                     secondsRemaining--;
+                    updateBossbar();
 
                     if (secondsRemaining <= 0) {
                         cancel();
                         if (previewPlacementTask != null) previewPlacementTask.cancel();
+                        removeBossbar();
                         previewTasks.remove(player.getUniqueId());
                         startGenerationPhase();
                     } else if (secondsRemaining <= 3) {
@@ -425,17 +469,22 @@ public class BlockPlacer {
                 }
             }.runTaskTimer(plugin, 20L, 20L);
         }
-        
+
         private void cancelPreviewAndRestore() {
+            removeBossbar();
             cancel();
             previewTasks.remove(player.getUniqueId());
         }
 
         private void startGenerationPhase() {
             generationStarted = true;
+            
+            // Keep preview blocks visible during generation - they will be gradually
+            // replaced by the actual blocks as placement progresses.
+            // The originalBlocks map already captured the state BEFORE preview,
+            // so WorldEdit undo will still work correctly.
+            
             player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.2f);
-
-            // Start the actual placement
             startPlacement(player, blocks, finalBlockData, originalBlocks, shapeName, gradientMap);
         }
 
@@ -453,18 +502,17 @@ public class BlockPlacer {
                 cancelled = true;
                 if (countdownTask != null) countdownTask.cancel();
                 if (previewPlacementTask != null) previewPlacementTask.cancel();
+                removeBossbar();
                 return;
             }
             cancelled = true;
             if (countdownTask != null) countdownTask.cancel();
             if (previewPlacementTask != null) previewPlacementTask.cancel();
+            removeBossbar();
             restoreOriginal();
         }
     }
 
-    /**
-     * Task for adaptive block placement based on server performance.
-     */
     private class PlacementTask extends BukkitRunnable {
         private final Player player;
         private final List<Location> blocks;
@@ -476,18 +524,26 @@ public class BlockPlacer {
         private int currentIndex = 0;
         private int lastProgressPercent = -1;
         private boolean paused = false;
-        private long startTime;
+        private final long startTime;
         private long lastStatusUpdate = 0;
         private int totalBlocksPlaced = 0;
 
-        public PlacementTask(Player player, List<Location> blocks, BlockData blockData,
-                           Map<Location, BlockData> originalBlocks, String shapeName) {
-            this(player, blocks, blockData, originalBlocks, shapeName, null);
-        }
+        private BossBar etaBossBar;
+        private long lastBossbarUpdate = 0;
+        private int lastBossbarBlocksPlaced = 0;
+        private long lastBossbarSampleTime = 0;
+        private double smoothedBps = 0.0;
+
+        private int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+        private int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+
+        // Single EditSession for the entire operation (for proper //undo support)
+        private EditSession editSession;
+        private boolean editSessionClosed = false;
 
         public PlacementTask(Player player, List<Location> blocks, BlockData blockData,
-                           Map<Location, BlockData> originalBlocks, String shapeName,
-                           Map<Location, BlockData> gradientMap) {
+                             Map<Location, BlockData> originalBlocks, String shapeName,
+                             Map<Location, BlockData> gradientMap) {
             this.player = player;
             this.blocks = new ArrayList<>(blocks);
             this.blockData = blockData;
@@ -496,20 +552,39 @@ public class BlockPlacer {
             this.gradientMap = gradientMap;
             this.startTime = System.currentTimeMillis();
 
-            // Sort blocks by distance from player for nice animation
+            for (Location loc : this.blocks) {
+                minX = Math.min(minX, loc.getBlockX());
+                minY = Math.min(minY, loc.getBlockY());
+                minZ = Math.min(minZ, loc.getBlockZ());
+                maxX = Math.max(maxX, loc.getBlockX());
+                maxY = Math.max(maxY, loc.getBlockY());
+                maxZ = Math.max(maxZ, loc.getBlockZ());
+            }
+
             Location center = player.getLocation();
-            this.blocks.sort((a, b) -> {
-                double distA = a.distanceSquared(center);
-                double distB = b.distanceSquared(center);
-                return Double.compare(distA, distB);
-            });
+            this.blocks.sort(Comparator.comparingDouble(a -> a.distanceSquared(center)));
+
+            // Initialize single EditSession for WorldEdit/FAWE integration
+            if (isWorldEditAvailable()) {
+                try {
+                    this.editSession = openEditSession(player, this.blocks.size());
+                } catch (Exception e) {
+                    plugin.getLogger().warning("Failed to create WorldEdit EditSession: " + e.getMessage());
+                    this.editSession = null;
+                }
+            }
+
+            createBossbar();
         }
-        
+
         public boolean isPaused() { return paused; }
         public void setPaused(boolean paused) { this.paused = paused; }
-        
+
         public void cancelAndRestore() {
             cancel();
+            removeBossbar();
+
+            // Restore using Bukkit directly (cancel is not an edit operation)
             for (Map.Entry<Location, BlockData> entry : originalBlocks.entrySet()) {
                 Location loc = entry.getKey();
                 if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
@@ -521,17 +596,15 @@ public class BlockPlacer {
         @Override
         public void run() {
             try {
-                // Check if player is online
                 if (!player.isOnline()) {
                     cancel();
+                    removeBossbar();
                     activeTasks.remove(player.getUniqueId());
                     return;
                 }
-                
-                // Skip if paused
+
                 if (paused) return;
-                
-                // Check for emergency - cancel operation
+
                 PerformanceMonitor perfMon = plugin.getPerformanceMonitor();
                 if (perfMon.shouldCancelOperation()) {
                     plugin.getMessageUtil().sendError(player, "Emergency: operation cancelled due to server overload.");
@@ -542,106 +615,325 @@ public class BlockPlacer {
                     return;
                 }
 
-                // Get adaptive blocks per tick from performance monitor
                 int blocksPerTick = perfMon.calculateBlocksPerTick();
-                
-                // If server is struggling, skip this tick entirely
                 if (blocksPerTick == 0) {
+                    updateBossbar(System.currentTimeMillis());
                     return;
                 }
 
-                // Place blocks
                 int endIndex = Math.min(currentIndex + blocksPerTick, blocks.size());
-                int blocksThisTick = 0;
-                
-                for (int i = currentIndex; i < endIndex; i++) {
-                    Location loc = blocks.get(i);
-                    if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
-                        Block block = loc.getBlock();
-                        BlockData data = gradientMap != null ? gradientMap.get(loc) : blockData;
-                        if (data != null) {
-                            block.setBlockData(data, false);
-                        }
-                        blocksThisTick++;
-                    }
+
+                // If WorldEdit is present, apply through EditSession for history
+                if (isWorldEditAvailable()) {
+                    applyWithWorldEdit(currentIndex, endIndex);
+                } else {
+                    applyWithBukkit(currentIndex, endIndex);
                 }
 
+                int placedThisTick = endIndex - currentIndex;
                 currentIndex = endIndex;
-                totalBlocksPlaced += blocksThisTick;
+                totalBlocksPlaced += placedThisTick;
 
-                // Update progress every 3 seconds
                 long now = System.currentTimeMillis();
-                if (now - lastStatusUpdate >= 3000) {
+                // Progress updates every 5 seconds
+                if (now - lastStatusUpdate >= 5000 && blocks.size() > 1000) {
                     lastStatusUpdate = now;
-                    
                     int percent = (currentIndex * 100) / blocks.size();
                     long elapsed = (now - startTime) / 1000;
                     int blocksPerSecond = elapsed > 0 ? (int) (totalBlocksPlaced / elapsed) : 0;
-                    int remaining = blocks.size() - currentIndex;
-                    int etaSeconds = blocksPerSecond > 0 ? remaining / blocksPerSecond : 0;
-                    
-                    // Build progress bar
-                    int barLength = 20;
-                    int filled = (percent * barLength) / 100;
-                    StringBuilder bar = new StringBuilder();
-                    for (int i = 0; i < barLength; i++) {
-                        if (i < filled) {
-                            bar.append("<green>█</green>");
-                        } else {
-                            bar.append("<dark_gray>░</dark_gray>");
-                        }
-                    }
-                    
-                    // Progress message.
-                    plugin.getMessageUtil().sendInfo(player, "Progress: " + percent + "%");
-                    plugin.getMessageUtil().sendInfo(
-                            player,
-                            "Placed " + formatNumber(currentIndex) + "/" + formatNumber(blocks.size()) +
-                                    " | Speed " + formatNumber(blocksPerSecond) + "/s" +
-                                    " | ETA " + formatTime(etaSeconds)
-                    );
-                    plugin.getMessageUtil().sendInfo(player, perfMon.getDetailedStatusMiniMessage());
+
+                    String progressColor = percent >= 75 ? "green" : (percent >= 40 ? "yellow" : "aqua");
+                    String bpsColor = blocksPerSecond >= 5000 ? "green" : (blocksPerSecond >= 1000 ? "yellow" : "gold");
+
+                    plugin.getMessageUtil().sendRaw(player,
+                        "<" + progressColor + ">" + percent + "%</" + progressColor + "> <gray>complete</gray>" +
+                        " <dark_gray>│</dark_gray> <" + bpsColor + ">" + formatNumber(blocksPerSecond) + "</" + bpsColor + "> <gray>blocks/s</gray>" +
+                        " <dark_gray>│</dark_gray> " + plugin.getPerformanceMonitor().getFullPerformanceSummaryMiniMessage());
                 }
 
-                // Show progress bar at milestones
+                updateBossbar(now);
+
                 if (plugin.getConfigManager().isShowProgress()) {
                     int percent = (currentIndex * 100) / blocks.size();
                     if (percent != lastProgressPercent && percent % 10 == 0) {
                         lastProgressPercent = percent;
-                        int progress = percent / 5; // 0-20 scale
-                        plugin.getMessageUtil().sendProgress(player, progress, percent);
+                        plugin.getMessageUtil().sendProgress(player, percent / 5, percent);
                     }
                 }
 
-                // Check if complete
                 if (currentIndex >= blocks.size()) {
                     cancel();
                     activeTasks.remove(player.getUniqueId());
-                    
+                    removeBossbar();
+
+                    // Close WorldEdit EditSession and register in history for //undo support
+                    closeEditSession();
+
+                    // Save operation to MCTools undo history
+                    plugin.getUndoManager().saveOperation(player, originalBlocks);
+
                     long totalTime = (System.currentTimeMillis() - startTime) / 1000;
                     long avgSpeed = totalTime > 0 ? blocks.size() / totalTime : blocks.size();
-                    
-                    plugin.getUndoManager().saveOperation(player, originalBlocks);
-                    
-                    // Completion message.
-                    plugin.getMessageUtil().sendInfo(player, "Generation complete.");
-                    plugin.getMessageUtil().sendInfo(
-                            player,
-                            "Shape: " + shapeName +
-                                    " | Blocks: " + formatNumber(blocks.size()) +
-                                    " | Time: " + formatTime(totalTime) +
-                                    " | Avg speed: " + formatNumber((int) avgSpeed) + "/s"
-                    );
-                    
+
+                    // Single completion message
+                    plugin.getMessageUtil().sendSuccess(player, shapeName, blocks.size());
+                    plugin.getMessageUtil().sendInfo(player, 
+                        formatNumber(blocks.size()) + " blocks in " + formatTime(totalTime) + 
+                        " (" + formatNumber((int) avgSpeed) + "/s) - /mct undo to revert");
+
+                    scheduleFloatingCleanupIfEnabled();
                     playCompletionEffects(player);
                 }
-                
+
             } catch (Exception e) {
                 plugin.getLogger().severe("Error in PlacementTask: " + e.getMessage());
                 cancel();
                 activeTasks.remove(player.getUniqueId());
+                removeBossbar();
                 plugin.getMessageUtil().sendError(player, "Error during placement: " + e.getMessage());
             }
+        }
+
+        private void applyWithBukkit(int from, int to) {
+            for (int i = from; i < to; i++) {
+                Location loc = blocks.get(i);
+                if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
+                    BlockData data = gradientMap != null ? gradientMap.get(loc) : blockData;
+                    if (data != null) {
+                        loc.getBlock().setBlockData(data, false);
+                    }
+                }
+            }
+        }
+
+        private void applyWithWorldEdit(int from, int to) throws WorldEditException {
+            // Use the single EditSession for the entire operation
+            // This ensures //undo will revert the complete operation, not just one tick batch
+            if (editSession == null || editSessionClosed) {
+                // Fallback to Bukkit if EditSession is not available
+                applyWithBukkit(from, to);
+                return;
+            }
+
+            for (int i = from; i < to; i++) {
+                Location loc = blocks.get(i);
+                if (loc.getWorld() == null || !loc.getChunk().isLoaded()) continue;
+
+                BlockData data = gradientMap != null ? gradientMap.get(loc) : blockData;
+                if (data == null) continue;
+
+                BlockVector3 pt = BlockVector3.at(loc.getBlockX(), loc.getBlockY(), loc.getBlockZ());
+                BlockState state = toWEBlockState(data);
+                editSession.setBlock(pt, state);
+                
+                // Also set via Bukkit for immediate visual feedback during animation
+                loc.getBlock().setBlockData(data, false);
+            }
+        }
+
+        /**
+         * Closes the EditSession and registers it in WorldEdit/FAWE history.
+         * Must be called when the operation completes or is cancelled.
+         */
+        private void closeEditSession() {
+            if (editSession == null || editSessionClosed) return;
+            editSessionClosed = true;
+
+            try {
+                // Close the session - this commits changes and records history
+                editSession.close();
+
+                // Register the EditSession in the player's LocalSession history
+                // This is crucial for //undo to work properly with FAWE
+                BukkitPlayer wePlayer = BukkitAdapter.adapt(player);
+                LocalSession localSession = WorldEdit.getInstance().getSessionManager().get(wePlayer);
+                if (localSession != null) {
+                    localSession.remember(editSession);
+                }
+            } catch (Exception e) {
+                plugin.getLogger().warning("Failed to close WorldEdit EditSession: " + e.getMessage());
+            }
+        }
+
+        private void createBossbar() {
+            if (!plugin.getConfigManager().isEtaBossbarEnabled()) return;
+            if (etaBossBar != null) return;
+            etaBossBar = Bukkit.createBossBar(
+                "§a§l⚙ §fGenerating §7│ §e" + shapeName + " §7│ §b0%",
+                BarColor.GREEN,
+                BarStyle.SEGMENTED_20
+            );
+            etaBossBar.setProgress(0.0);
+            etaBossBar.addPlayer(player);
+            etaBossBar.setVisible(true);
+            lastBossbarSampleTime = System.currentTimeMillis();
+            lastBossbarBlocksPlaced = 0;
+        }
+
+        private void removeBossbar() {
+            if (etaBossBar == null) return;
+            try {
+                etaBossBar.removeAll();
+            } finally {
+                etaBossBar = null;
+            }
+        }
+
+        private void updateBossbar(long now) {
+            if (etaBossBar == null) return;
+            long updateEveryMs = plugin.getConfigManager().getEtaBossbarUpdateTicks() * 50L;
+            if (now - lastBossbarUpdate < updateEveryMs) return;
+            lastBossbarUpdate = now;
+
+            double progress = blocks.isEmpty() ? 0.0 : Math.min(1.0, Math.max(0.0, currentIndex / (double) blocks.size()));
+            etaBossBar.setProgress(progress);
+
+            long dtMs = Math.max(1, now - lastBossbarSampleTime);
+            int dBlocks = Math.max(0, totalBlocksPlaced - lastBossbarBlocksPlaced);
+            double instBps = dBlocks / (dtMs / 1000.0);
+
+            double alpha = 0.35;
+            smoothedBps = (smoothedBps <= 0.0) ? instBps : (alpha * instBps + (1.0 - alpha) * smoothedBps);
+
+            lastBossbarSampleTime = now;
+            lastBossbarBlocksPlaced = totalBlocksPlaced;
+
+            long elapsedSec = Math.max(0, (now - startTime) / 1000);
+
+            int etaSec;
+            if (progress > 0.01) {
+                etaSec = (int) Math.max(0, (elapsedSec / progress) - elapsedSec);
+            } else if (smoothedBps > 0.5) {
+                int remaining = Math.max(0, blocks.size() - currentIndex);
+                etaSec = (int) Math.max(0, remaining / smoothedBps);
+            } else {
+                etaSec = 0;
+            }
+
+            int percent = (int) Math.round(progress * 100.0);
+            String etaText = formatEta(etaSec);
+            int bps = (int) Math.round(smoothedBps);
+            
+            // Dynamic color based on progress
+            String icon;
+            if (percent >= 90) {
+                icon = "§a§l✔";
+                etaBossBar.setColor(BarColor.GREEN);
+            } else if (percent >= 50) {
+                icon = "§e§l⚙";
+                etaBossBar.setColor(BarColor.YELLOW);
+            } else {
+                icon = "§b§l⚙";
+                etaBossBar.setColor(BarColor.BLUE);
+            }
+            
+            // Build beautiful title
+            StringBuilder title = new StringBuilder();
+            title.append(icon).append(" §f").append(shapeName);
+            title.append(" §7│ §a").append(percent).append("%");
+            title.append(" §7│ §e").append(formatNumber(bps)).append("/s");
+            if (etaSec > 0) {
+                title.append(" §7│ §b").append(etaText);
+            }
+            
+            etaBossBar.setTitle(title.toString());
+        }
+
+        private String formatEta(int seconds) {
+            if (seconds <= 0) return "";
+            if (seconds < 60) return seconds + "s";
+            int m = seconds / 60;
+            int s = seconds % 60;
+            return String.format("%d:%02d", m, s);
+        }
+
+        private void scheduleFloatingCleanupIfEnabled() {
+            if (!plugin.getConfigManager().isFloatingCleanupEnabled()) return;
+
+            int maxBlocks = plugin.getConfigManager().getFloatingCleanupMaxBlocks();
+            int blocksPerTick = Math.max(50, plugin.getConfigManager().getFloatingCleanupBlocksPerTick());
+
+            int pad = plugin.getConfigManager().getFloatingCleanupPadding();
+            int fx1 = minX - pad;
+            int fy1 = Math.max(player.getWorld().getMinHeight(), minY - pad);
+            int fz1 = minZ - pad;
+            int fx2 = maxX + pad;
+            int fy2 = Math.min(player.getWorld().getMaxHeight() - 1, maxY + pad);
+            int fz2 = maxZ + pad;
+
+            new BukkitRunnable() {
+                int x = fx1, y = fy1, z = fz1;
+                int scanned = 0;
+                int removed = 0;
+
+                @Override
+                public void run() {
+                    if (!player.isOnline()) {
+                        cancel();
+                        return;
+                    }
+
+                    int budget = blocksPerTick;
+                    while (budget-- > 0) {
+                        if (maxBlocks > 0 && scanned >= maxBlocks) {
+                            finish();
+                            return;
+                        }
+
+                        Block b = player.getWorld().getBlockAt(x, y, z);
+                        scanned++;
+
+                        if (shouldRemoveFloating(b)) {
+                            b.setType(Material.AIR, false);
+                            removed++;
+                        }
+
+                        x++;
+                        if (x > fx2) {
+                            x = fx1;
+                            z++;
+                            if (z > fz2) {
+                                z = fz1;
+                                y++;
+                                if (y > fy2) {
+                                    finish();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                private void finish() {
+                    cancel();
+                    if (removed > 0) {
+                        plugin.getMessageUtil().sendInfo(player, "Cleanup: removed " + removed + " floating block(s)." );
+                    }
+                }
+
+                private boolean shouldRemoveFloating(Block block) {
+                    Material type = block.getType();
+                    if (type.isAir()) return false;
+                    if (type == Material.BEDROCK) return false;
+
+                    Set<Material> whitelist = plugin.getConfigManager().getFloatingCleanupWhitelist();
+                    if (!whitelist.isEmpty() && !whitelist.contains(type)) return false;
+
+                    Set<Material> blacklist = plugin.getConfigManager().getFloatingCleanupBlacklist();
+                    if (blacklist.contains(type)) return false;
+
+                    if (type.hasGravity()) return false;
+
+                    Block below = block.getRelative(0, -1, 0);
+                    if (!below.getType().isAir()) return false;
+
+                    return block.getRelative(1, 0, 0).getType().isAir()
+                        && block.getRelative(-1, 0, 0).getType().isAir()
+                        && block.getRelative(0, 0, 1).getType().isAir()
+                        && block.getRelative(0, 0, -1).getType().isAir()
+                        && block.getRelative(0, 1, 0).getType().isAir();
+                }
+            }.runTaskTimer(plugin, 1L, 1L);
         }
     }
 }

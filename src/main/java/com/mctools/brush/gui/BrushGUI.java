@@ -18,11 +18,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Minimal Terrain GUI - Clean, spacious design.
- * 54 slots with clear organization.
- * 
- * @author MCTools Team
- * @version 4.0.0
+ * Terrain brush GUI – a 54-slot chest inventory with clean, spacious layout.
+ *
+ * <p>Row 1: main controls (toggle, heightmap, block, mode).
+ * Row 3: numeric values (size, intensity, max height).
+ * Row 4–5: options (auto-smooth, smooth strength, auto-rotation, circular mask, preview).
+ * Row 6: usage info.</p>
  */
 public class BrushGUI implements InventoryHolder {
 
@@ -236,7 +237,6 @@ public class BrushGUI implements InventoryHolder {
                 )
         ));
         
-        // Preview toggle
         inventory.setItem(SLOT_PREVIEW, createItem(
                 settings.isPreviewEnabled() ? Material.LIME_STAINED_GLASS : Material.GRAY_STAINED_GLASS,
                 settings.isPreviewEnabled() ? "§a§lPREVIEW ON" : "§c§lPREVIEW OFF",
@@ -402,7 +402,6 @@ public class BrushGUI implements InventoryHolder {
     @Override public Inventory getInventory() { return inventory; }
     public Player getPlayer() { return player; }
     
-    // Slot getters
     public static int getSlotToggle() { return SLOT_TOGGLE; }
     public static int getSlotHeightmap() { return SLOT_HEIGHTMAP; }
     public static int getSlotBlock() { return SLOT_BLOCK; }

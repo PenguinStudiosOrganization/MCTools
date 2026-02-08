@@ -21,10 +21,11 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Command handler for MCBrush terrain brush system.
- * 
- * @author MCTools Team
- * @version 1.0.0
+ * Command handler for the MCBrush terrain brush system ({@code /mcb}).
+ *
+ * <p>Handles all brush sub-commands: toggle, size, intensity, height,
+ * block selection, heightmap selection, mode, auto-smooth, and more.
+ * When invoked with no arguments, opens the brush GUI.</p>
  */
 public class MCBrushCommand implements CommandExecutor, TabCompleter {
 
@@ -58,7 +59,6 @@ public class MCBrushCommand implements CommandExecutor, TabCompleter {
         BrushManager brushManager = plugin.getBrushManager();
         BrushSettings settings = brushManager.getSettings(player.getUniqueId());
 
-        // No args - open GUI
         if (args.length == 0) {
             new BrushGUI(plugin, player).open();
             return true;

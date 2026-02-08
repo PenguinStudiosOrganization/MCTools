@@ -38,14 +38,22 @@ public class MessageUtil {
     public static final String OPTIONAL_COLOR = "#52525b"; // Gray
     public static final String TEXT_COLOR = "#a1a1aa";     // Light gray
 
+    /** Fallback message shown when MiniMessage parsing fails. */
+    private static final String FALLBACK_MESSAGE = "§7Messaggio non disponibile, gentilmente contatta il supporto §b§nhttps://discord.penguinstudios.eu/";
+
     /**
      * Parses a MiniMessage string into a Component.
+     * Falls back to a plain error message if parsing fails.
      * 
      * @param message The MiniMessage formatted string
      * @return The parsed Component
      */
     public Component parse(String message) {
-        return MINI_MESSAGE.deserialize(message);
+        try {
+            return MINI_MESSAGE.deserialize(message);
+        } catch (Exception e) {
+            return Component.text(stripLegacyCodes(message));
+        }
     }
 
     /**
@@ -55,7 +63,11 @@ public class MessageUtil {
      * @return The parsed Component with prefix
      */
     public Component parseWithPrefix(String message) {
-        return MINI_MESSAGE.deserialize(PREFIX + message);
+        try {
+            return MINI_MESSAGE.deserialize(PREFIX + message);
+        } catch (Exception e) {
+            return Component.text("§a§lMCTools §7│ " + stripLegacyCodes(message));
+        }
     }
 
     /**
@@ -66,9 +78,13 @@ public class MessageUtil {
      * @param blockCount The number of blocks placed
      */
     public void sendSuccess(Player player, String shape, int blockCount) {
-        String message = PREFIX + "<" + TEXT_COLOR + ">Generated <" + CMD_COLOR + "><bold>" + shape + 
-                "</bold></" + CMD_COLOR + "> with <" + CMD_COLOR + ">" + blockCount + "</" + CMD_COLOR + "> blocks";
-        player.sendMessage(MINI_MESSAGE.deserialize(message));
+        try {
+            String message = PREFIX + "<" + TEXT_COLOR + ">Generated <" + CMD_COLOR + "><bold>" + shape + 
+                    "</bold></" + CMD_COLOR + "> with <" + CMD_COLOR + ">" + blockCount + "</" + CMD_COLOR + "> blocks";
+            player.sendMessage(MINI_MESSAGE.deserialize(message));
+        } catch (Exception e) {
+            player.sendMessage("§a§lMCTools §7│ §aGenerated §f" + shape + " §awith §f" + blockCount + " §ablocks");
+        }
     }
 
     /**
@@ -78,8 +94,14 @@ public class MessageUtil {
      * @param message The error message
      */
     public void sendError(Player player, String message) {
-        String formatted = PREFIX + "<#ef4444>✗</#ef4444> <" + TEXT_COLOR + ">" + message;
-        player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        try {
+            // Sanitize legacy § codes that break MiniMessage
+            String sanitized = sanitizeForMiniMessage(message);
+            String formatted = PREFIX + "<#ef4444>✗</#ef4444> <" + TEXT_COLOR + ">" + sanitized;
+            player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        } catch (Exception e) {
+            player.sendMessage("§a§lMCTools §7│ §c✗ " + message);
+        }
     }
 
     /**
@@ -89,8 +111,13 @@ public class MessageUtil {
      * @param message The info message
      */
     public void sendInfo(Player player, String message) {
-        String formatted = PREFIX + "<#3b82f6>ℹ</#3b82f6> <" + TEXT_COLOR + ">" + message;
-        player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        try {
+            String sanitized = sanitizeForMiniMessage(message);
+            String formatted = PREFIX + "<#3b82f6>ℹ</#3b82f6> <" + TEXT_COLOR + ">" + sanitized;
+            player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        } catch (Exception e) {
+            player.sendMessage("§a§lMCTools §7│ §bℹ §7" + message);
+        }
     }
 
     /**
@@ -107,14 +134,55 @@ public class MessageUtil {
     }
 
     /**
+     * Sends a raw MiniMessage-formatted message with the plugin prefix.
+     * Unlike sendInfo(), this does NOT wrap the message in TEXT_COLOR,
+     * allowing the caller to provide fully custom-colored content.
+     *
+     * @param player  The player to send the message to
+     * @param miniMsg The MiniMessage formatted string (colors included)
+     */
+    public void sendRaw(Player player, String miniMsg) {
+        try {
+            String formatted = PREFIX + miniMsg;
+            player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        } catch (Exception e) {
+            player.sendMessage("§a§lMCTools §7│ §7" + stripLegacyCodes(miniMsg));
+        }
+    }
+
+    /**
      * Sends a warning message to a player.
      * 
      * @param player The player to send the message to
      * @param message The warning message
      */
     public void sendWarning(Player player, String message) {
-        String formatted = PREFIX + "<#f97316>⚠</#f97316> <" + TEXT_COLOR + ">" + message;
-        player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        try {
+            String sanitized = sanitizeForMiniMessage(message);
+            String formatted = PREFIX + "<#f97316>⚠</#f97316> <" + TEXT_COLOR + ">" + sanitized;
+            player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        } catch (Exception e) {
+            player.sendMessage("§a§lMCTools §7│ §6⚠ §7" + message);
+        }
+    }
+
+    /**
+     * Sanitizes a string containing legacy § color codes for use with MiniMessage.
+     * Strips § codes since MiniMessage doesn't support them.
+     */
+    private String sanitizeForMiniMessage(String input) {
+        if (input == null) return "";
+        // Replace legacy § codes with empty string for MiniMessage compatibility
+        return input.replaceAll("§[0-9a-fk-or]", "");
+    }
+
+    /**
+     * Strips legacy color codes from a string for plain text fallback.
+     */
+    private String stripLegacyCodes(String input) {
+        if (input == null) return "";
+        return input.replaceAll("§[0-9a-fk-or]", "")
+                     .replaceAll("<[^>]+>", ""); // Also strip MiniMessage tags
     }
 
     /**

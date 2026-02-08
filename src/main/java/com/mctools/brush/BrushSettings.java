@@ -6,17 +6,14 @@ import java.awt.image.BufferedImage;
 import java.util.UUID;
 
 /**
- * Stores brush settings for a player.
- * Terrain brush settings only.
- * 
- * @author MCTools Team
- * @version 3.0.0
+ * Stores per-player terrain brush settings such as size, intensity,
+ * max height, block type, heightmap, mode, and various toggles
+ * (auto-smooth, auto-rotation, circular mask, preview).
  */
 public class BrushSettings {
 
     private final UUID playerUuid;
     
-    // Basic brush settings
     private boolean enabled;
     private int size;
     private int intensity;
@@ -56,10 +53,6 @@ public class BrushSettings {
         this.previewEnabled = true;
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // Basic Getters and Setters
-    // ═══════════════════════════════════════════════════════════════
-    
     public UUID getPlayerUuid() { return playerUuid; }
     
     public boolean isEnabled() { return enabled; }

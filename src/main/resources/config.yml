@@ -4,12 +4,14 @@
 # SHAPE GENERATION SETTINGS
 # ============================================
 
-# Maximum blocks per operation (0 = unlimited for ops)
-max-blocks: 50000
+# Maximum blocks per operation (applies to everyone, no bypass)
+# Set to 0 to disable the limit entirely
+max-blocks: 500000
 
 # Maximum radius/size allowed
-max-radius: 64
+max-radius: 128
 max-height: 128
+max-thickness: 32
 
 # Enable async block placement for large operations
 async-placement: true

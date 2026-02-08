@@ -8,6 +8,7 @@ import org.bukkit.scheduler.BukkitTask;
 
 import java.util.LinkedList;
 import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedDeque;
 
 /**
  * Server performance guard and adaptive throttling helper.
@@ -55,6 +56,11 @@ public class PerformanceMonitor {
     private double averageTps = 20.0;
     private double lastTps = 20.0;
 
+    // MSPT (milliseconds per tick) monitoring
+    private static final int MSPT_SAMPLE_COUNT = 60;
+    private final Queue<Double> msptSamples = new LinkedList<>();
+    private double averageMspt = 50.0;
+
     // RAM monitoring
     private double ramUsagePercent = 0.0;
     private long usedMemoryMB = 0;
@@ -66,6 +72,19 @@ public class PerformanceMonitor {
 
     // Monitoring task
     private BukkitTask monitorTask;
+    private BukkitTask snapshotTask;
+
+    // ── Historical performance snapshots ──
+    // A snapshot is recorded every second; older entries are pruned automatically.
+    // Max retention: 1 hour (3600 entries).
+    private static final int MAX_HISTORY_SECONDS = 3600;
+    private final ConcurrentLinkedDeque<PerformanceSnapshot> history = new ConcurrentLinkedDeque<>();
+
+    /** Immutable snapshot of server metrics at a point in time. */
+    public record PerformanceSnapshot(long timestampMs, double tps, double mspt, double ramPercent, int blocksPerTick) {}
+
+    /** Averaged metrics over a time window. */
+    public record WindowAverage(String label, double avgTps, double avgMspt, double avgRamPercent, int avgBpt, int sampleCount) {}
 
     public enum PerformanceState {
         EXCELLENT("§a⚡⚡", "§aExcellent", "<green>⚡⚡</green>", "<green>Excellent</green>", 1.0),
@@ -93,6 +112,7 @@ public class PerformanceMonitor {
     public PerformanceMonitor(MCTools plugin) {
         this.plugin = plugin;
         startMonitoring();
+        startSnapshotRecording();
     }
 
     /** Starts the TPS and RAM monitoring task. */
@@ -108,6 +128,18 @@ public class PerformanceMonitor {
 
                 // Calculate instantaneous TPS.
                 double instantTps = Math.min(20.0, 1.0 / elapsed);
+
+                // Calculate MSPT (milliseconds per tick).
+                double instantMspt = elapsed * 1000.0; // convert seconds to ms
+                msptSamples.add(instantMspt);
+                if (msptSamples.size() > MSPT_SAMPLE_COUNT) {
+                    msptSamples.poll();
+                }
+                double msptSum = 0;
+                for (double sample : msptSamples) {
+                    msptSum += sample;
+                }
+                averageMspt = msptSum / msptSamples.size();
 
                 // Use Bukkit's TPS as the main signal (more reliable than local timing).
                 double[] bukkitTps = Bukkit.getTPS();
@@ -166,10 +198,70 @@ public class PerformanceMonitor {
         }
     }
 
+    /** Records a performance snapshot every second and prunes old entries. */
+    private void startSnapshotRecording() {
+        snapshotTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                history.addLast(new PerformanceSnapshot(
+                        System.currentTimeMillis(), averageTps, averageMspt, ramUsagePercent, calculateBlocksPerTick()));
+
+                // Prune entries older than MAX_HISTORY_SECONDS
+                long cutoff = System.currentTimeMillis() - (MAX_HISTORY_SECONDS * 1000L);
+                while (!history.isEmpty() && history.peekFirst().timestampMs() < cutoff) {
+                    history.pollFirst();
+                }
+            }
+        }.runTaskTimer(plugin, 20L, 20L); // every 1 second (20 ticks)
+    }
+
+    /**
+     * Computes the average metrics over the last {@code seconds} seconds.
+     *
+     * @param label   human-readable label (e.g. "10s", "1m")
+     * @param seconds window size in seconds
+     * @return a {@link WindowAverage}, or {@code null} if no data is available for that window
+     */
+    public WindowAverage getWindowAverage(String label, int seconds) {
+        long cutoff = System.currentTimeMillis() - (seconds * 1000L);
+        double sumTps = 0, sumMspt = 0, sumRam = 0;
+        long sumBpt = 0;
+        int count = 0;
+
+        // Iterate from newest to oldest; stop early once we pass the cutoff
+        for (var it = history.descendingIterator(); it.hasNext(); ) {
+            PerformanceSnapshot snap = it.next();
+            if (snap.timestampMs() < cutoff) break;
+            sumTps += snap.tps();
+            sumMspt += snap.mspt();
+            sumRam += snap.ramPercent();
+            sumBpt += snap.blocksPerTick();
+            count++;
+        }
+
+        if (count == 0) return null;
+
+        return new WindowAverage(label,
+                sumTps / count,
+                sumMspt / count,
+                sumRam / count,
+                (int) (sumBpt / count),
+                count);
+    }
+
+    /** @return the uptime of the monitor in seconds (based on snapshot history). */
+    public long getUptimeSeconds() {
+        if (history.isEmpty()) return 0;
+        return (System.currentTimeMillis() - history.peekFirst().timestampMs()) / 1000;
+    }
+
     /** Stops the monitoring task. */
     public void stop() {
         if (monitorTask != null) {
             monitorTask.cancel();
+        }
+        if (snapshotTask != null) {
+            snapshotTask.cancel();
         }
     }
 
@@ -181,6 +273,84 @@ public class PerformanceMonitor {
     /** @return Bukkit's 1-minute TPS average (index 0). */
     public double getBukkitTps() {
         return Bukkit.getTPS()[0];
+    }
+
+    /** @return the current average MSPT (milliseconds per tick). */
+    public double getAverageMspt() {
+        return averageMspt;
+    }
+
+    /**
+     * Returns a performance label based on current state (English).
+     */
+    public String getPerformanceLabel() {
+        return switch (currentState) {
+            case EXCELLENT -> "Excellent";
+            case GOOD -> "Good";
+            case MEDIUM -> "Average";
+            case LOW -> "Poor";
+            case CRITICAL -> "Critical";
+            case EMERGENCY -> "EMERGENCY";
+        };
+    }
+
+    /**
+     * Returns a full performance summary as a plain text string (no legacy codes).
+     * Suitable for passing to MessageUtil.sendInfo() which adds the MCTools prefix.
+     * Example: "Excellent | TPS: 19.8 | MSPT: 12.3ms | RAM: 1024/4096MB (25%)"
+     */
+    public String getFullPerformanceSummary() {
+        int ramPercent = (int) (ramUsagePercent * 100);
+        int bpt = calculateBlocksPerTick();
+
+        return getPerformanceLabel() + " | TPS: " + String.format("%.1f", averageTps) +
+                " | MSPT: " + String.format("%.1f", averageMspt) + "ms" +
+                " | RAM: " + usedMemoryMB + "/" + maxMemoryMB + "MB (" + ramPercent + "%)" +
+                " | Speed: " + bpt + " b/t";
+    }
+
+    /**
+     * Returns a full performance summary formatted with MiniMessage colors.
+     * Each metric (TPS, MSPT, RAM, Speed) is color-coded based on its value.
+     * Suitable for sending via MessageUtil.sendRaw() with the plugin prefix.
+     */
+    public String getFullPerformanceSummaryMiniMessage() {
+        int ramPercent = (int) (ramUsagePercent * 100);
+        int bpt = calculateBlocksPerTick();
+
+        // TPS color: green >= 18, yellow >= 15, gold >= 12, red < 12
+        String tpsColor;
+        if (averageTps >= 18.0) tpsColor = "green";
+        else if (averageTps >= 15.0) tpsColor = "yellow";
+        else if (averageTps >= 12.0) tpsColor = "gold";
+        else tpsColor = "red";
+
+        // MSPT color: green <= 30, yellow <= 45, gold <= 50, red > 50
+        String msptColor;
+        if (averageMspt <= 30.0) msptColor = "green";
+        else if (averageMspt <= 45.0) msptColor = "yellow";
+        else if (averageMspt <= 50.0) msptColor = "gold";
+        else msptColor = "red";
+
+        // RAM color based on existing thresholds
+        String ramColor;
+        if (ramUsagePercent >= RAM_CRITICAL) ramColor = "dark_red";
+        else if (ramUsagePercent >= RAM_DANGER) ramColor = "red";
+        else if (ramUsagePercent >= RAM_WARNING) ramColor = "gold";
+        else ramColor = "green";
+
+        // Speed color: based on performance state
+        String speedColor;
+        if (bpt >= 1000) speedColor = "green";
+        else if (bpt >= 200) speedColor = "yellow";
+        else if (bpt >= 50) speedColor = "gold";
+        else speedColor = "red";
+
+        return currentState.iconMini + " " + currentState.nameMini +
+                " <dark_gray>│</dark_gray> <gray>TPS:</gray> <" + tpsColor + ">" + String.format("%.1f", averageTps) + "</" + tpsColor + ">" +
+                " <dark_gray>│</dark_gray> <gray>MSPT:</gray> <" + msptColor + ">" + String.format("%.1f", averageMspt) + "ms</" + msptColor + ">" +
+                " <dark_gray>│</dark_gray> <gray>RAM:</gray> <" + ramColor + ">" + usedMemoryMB + "</" + ramColor + "><gray>/</gray><white>" + maxMemoryMB + "MB</white> <gray>(</gray><" + ramColor + ">" + ramPercent + "%</" + ramColor + "><gray>)</gray>" +
+                " <dark_gray>│</dark_gray> <gray>Speed:</gray> <" + speedColor + ">" + bpt + "</" + speedColor + "> <gray>b/t</gray>";
     }
 
     /** @return RAM usage as percentage (0.0 - 1.0). */
@@ -359,13 +529,15 @@ public class PerformanceMonitor {
      * @return an error message if not safe; otherwise {@code null}
      */
     public String checkOperationSafety(int estimatedBlocks) {
+        int ramPercent = (int) (ramUsagePercent * 100);
+
         if (currentState == PerformanceState.EMERGENCY) {
-            return "§cServer is under extreme load! RAM: " + getRamStatus() + " §c- Operation cancelled.";
+            return "Server is under extreme load! RAM: " + usedMemoryMB + "/" + maxMemoryMB + "MB (" + ramPercent + "%) - Operation cancelled.";
         }
 
         if (currentState == PerformanceState.CRITICAL) {
-            return "§cServer performance is critical! TPS: §f" + String.format("%.1f", averageTps) +
-                    " §c| RAM: " + getRamStatus() + " §c- Please wait.";
+            return "Server performance is critical! TPS: " + String.format("%.1f", averageTps) +
+                    " | RAM: " + usedMemoryMB + "/" + maxMemoryMB + "MB (" + ramPercent + "%) - Please wait.";
         }
 
         // Rough memory estimate (~100 bytes per block for Location + BlockData).
@@ -373,7 +545,7 @@ public class PerformanceMonitor {
         long availableMemoryMB = maxMemoryMB - usedMemoryMB;
 
         if (estimatedMemoryMB > availableMemoryMB * 0.5) {
-            return "§cOperation too large! Estimated memory: §f" + estimatedMemoryMB + "MB §c| Available: §f" + availableMemoryMB + "MB";
+            return "Operation too large! Estimated memory: " + estimatedMemoryMB + "MB | Available: " + availableMemoryMB + "MB";
         }
 
         return null;

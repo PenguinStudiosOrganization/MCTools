@@ -14,30 +14,17 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
- * Main plugin class.
+ * MCTools – Advanced shape generation tool for Minecraft builders.
  *
- * <p>This plugin provides advanced tools for Minecraft builders:
- * shapes (2D/3D), terrain brush, preview, undo/redo and async placement.</p>
+ * <p>This plugin provides a comprehensive set of tools for building in Minecraft,
+ * including 2D shapes (circles, squares, rectangles, polygons, etc.),
+ * 3D shapes (spheres, cylinders, pyramids, torus, etc.),
+ * a terrain brush system with heightmap support,
+ * preview mode with teleportation, an undo/redo system (up to 1000 operations),
+ * and async block placement with adaptive throttling.</p>
  *
- * <p>Project:
- * <ul>
- *   <li>Team: PenguinStudios</li>
- *   <li>Website: https://mcutils.net/</li>
- *   <li>Releases: https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release</li>
- * </ul>
- * </p>
- * MCTools - Advanced shape generation tool for Minecraft builders.
- * 
- * Features:
- * - 2D shapes (circles, squares, rectangles, polygons, etc.)
- * - 3D shapes (spheres, cylinders, pyramids, torus, etc.)
- * - Terrain brush with heightmap support
- * - Preview mode with teleportation
- * - Advanced undo/redo system (up to 1000 operations)
- * - Async block placement
- * 
- * @author PenguinStudios
- * @version 2.0.0
+ * @see <a href="https://mcutils.net/">Website</a>
+ * @see <a href="https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release">Releases</a>
  */
 public final class MCTools extends JavaPlugin {
 
@@ -48,6 +35,7 @@ public final class MCTools extends JavaPlugin {
     private BrushManager brushManager;
     private PerformanceMonitor performanceMonitor;
     private BlockPlacer blockPlacer;
+    private PlayerListener playerListener;
 
     public static MCTools getInstance() {
         return instance;
@@ -69,7 +57,8 @@ public final class MCTools extends JavaPlugin {
 
         // Commands and listeners.
         registerCommands();
-        getServer().getPluginManager().registerEvents(new PlayerListener(this), this);
+        playerListener = new PlayerListener(this);
+        getServer().getPluginManager().registerEvents(playerListener, this);
 
         long loadTime = System.currentTimeMillis() - startTime;
 
@@ -116,7 +105,7 @@ public final class MCTools extends JavaPlugin {
         System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Undo/Redo system (1000 ops)" + R + "            " + C + B + "║" + R);
         System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Preview with teleportation" + R + "             " + C + B + "║" + R);
         System.out.println(C + B + "  ╠════════════════════════════════════════════╣" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Load time: " + G + loadTime + "ms" + R + padSpaces(30 - String.valueOf(loadTime).length()) + C + B + "║" + R);
+        System.out.println(C + B + "  ║" + R + GR + " Load time: " + G + loadTimeMs + "ms" + R + padSpaces(30 - String.valueOf(loadTimeMs).length()) + C + B + "║" + R);
         System.out.println(C + B + "  ║" + R + GR + " Status:    " + G + B + "● READY" + R + "                          " + C + B + "║" + R);
         System.out.println(C + B + "  ╚════════════════════════════════════════════╝" + R);
         System.out.println();
@@ -195,5 +184,9 @@ public final class MCTools extends JavaPlugin {
     
     public BlockPlacer getBlockPlacer() {
         return blockPlacer;
+    }
+    
+    public PlayerListener getPlayerListener() {
+        return playerListener;
     }
 }

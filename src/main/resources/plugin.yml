@@ -1,10 +1,13 @@
 name: MCTools
-version: '1.0.0'
+version: '1.2.0'
 main: com.mctools.MCTools
 api-version: '1.20'
 description: Advanced shape generation and terrain brush tool for builders
 authors: [PenguinStudios Development]
 website: https://mcutils.net
+
+softdepend:
+  - WorldEdit
 
 commands:
   mctools:
@@ -58,6 +61,12 @@ permissions:
     default: op
   mctools.bypass.limit:
     description: Bypass block limit
+    default: op
+  mctools.center:
+    description: Use /mct center
+    default: op
+  mctools.worldedit.cp:
+    description: Use /mct cp (WorldEdit copy+paste)
     default: op
   mctools.brush:
     description: Use MCBrush terrain tool

@@ -19,10 +19,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * GUI for selecting heightmaps with ASCII preview in lore.
- * 
- * @author MCTools Team
- * @version 1.0.0
+ * Paginated GUI for selecting heightmaps.
+ * Each heightmap item shows an ASCII art preview in its lore,
+ * rendered from the grayscale image using 4 brightness levels.
  */
 public class HeightmapSelectorGUI implements InventoryHolder {
 
@@ -151,10 +150,7 @@ public class HeightmapSelectorGUI implements InventoryHolder {
         inventory.setItem(navRow + 8, reloadItem);
     }
 
-    /**
-     * Generates an ASCII art preview of the heightmap using ■ symbols.
-     * Uses §f (white), §7 (gray), §8 (dark gray), §0 (black) for different brightness levels.
-     */
+    /** Generates an ASCII art preview of the heightmap using 4 brightness levels (■ symbols). */
     private List<String> generateAsciiPreview(BufferedImage img) {
         List<String> lines = new ArrayList<>();
         
@@ -180,18 +176,11 @@ public class HeightmapSelectorGUI implements InventoryHolder {
                 int rgb = img.getRGB(imgX, imgY);
                 int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
                 
-                // Map grayscale to 4 color levels using ■ symbol
-                // 0-63: §0 (black), 64-127: §8 (dark gray), 128-191: §7 (gray), 192-255: §f (white)
                 String colorCode;
-                if (gray < 64) {
-                    colorCode = "§0";      // Black
-                } else if (gray < 128) {
-                    colorCode = "§8";      // Dark gray
-                } else if (gray < 192) {
-                    colorCode = "§7";      // Gray
-                } else {
-                    colorCode = "§f";      // White
-                }
+                if (gray < 64) colorCode = "§0";
+                else if (gray < 128) colorCode = "§8";
+                else if (gray < 192) colorCode = "§7";
+                else colorCode = "§f";
                 
                 line.append(colorCode).append("■");
             }

@@ -51,7 +51,10 @@ public class Cylinder extends Shape3D {
         double centerZ = center.getBlockZ();
 
         double radiusSquared = radius * radius;
-        double innerRadiusSquared = hollow ? (radius - thickness) * (radius - thickness) : 0;
+        // Ensure thickness doesn't exceed radius for hollow cylinder
+        int effectiveThickness = hollow ? Math.min(thickness, radius) : thickness;
+        double innerRadius = Math.max(0, radius - effectiveThickness);
+        double innerRadiusSquared = innerRadius * innerRadius;
 
         for (int y = 0; y < height; y++) {
             for (int x = -radius; x <= radius; x++) {
@@ -59,8 +62,10 @@ public class Cylinder extends Shape3D {
                     double distSquared = x * x + z * z;
 
                     if (hollow) {
-                        // Hollow cylinder - only walls, no top/bottom caps
-                        if (distSquared <= radiusSquared && distSquared > innerRadiusSquared) {
+                        // Base (y=0) and top (y=height-1) are filled caps
+                        boolean isCap = (y == 0 || y == height - 1);
+                        boolean isWall = distSquared <= radiusSquared && distSquared > innerRadiusSquared;
+                        if (isCap ? (distSquared <= radiusSquared) : isWall) {
                             addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
                         }
                     } else {

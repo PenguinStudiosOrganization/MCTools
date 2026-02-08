@@ -56,35 +56,27 @@ public class Arch extends Shape3D {
         double centerZ = center.getBlockZ();
 
         int halfWidth = width / 2;
+        int legThickness = hollow ? thickness : archRadius; // filled legs span full archRadius width
 
-        // Generate left leg
+        // Generate left leg - ALWAYS solid (filled) regardless of hollow setting
         for (int y = 0; y < legHeight; y++) {
-            for (int z = -halfWidth; z <= halfWidth; z++) {
-                if (hollow) {
-                    // Only outer edges
-                    if (Math.abs(z) > halfWidth - thickness) {
-                        addBlock(blocks, world, centerX, centerY, centerZ, -archRadius, y, z);
-                    }
-                } else {
-                    addBlock(blocks, world, centerX, centerY, centerZ, -archRadius, y, z);
+            for (int x = -archRadius; x <= -archRadius + legThickness - 1; x++) {
+                for (int z = -halfWidth; z <= halfWidth; z++) {
+                    addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
                 }
             }
         }
 
-        // Generate right leg
+        // Generate right leg - ALWAYS solid (filled) regardless of hollow setting
         for (int y = 0; y < legHeight; y++) {
-            for (int z = -halfWidth; z <= halfWidth; z++) {
-                if (hollow) {
-                    if (Math.abs(z) > halfWidth - thickness) {
-                        addBlock(blocks, world, centerX, centerY, centerZ, archRadius, y, z);
-                    }
-                } else {
-                    addBlock(blocks, world, centerX, centerY, centerZ, archRadius, y, z);
+            for (int x = archRadius - legThickness + 1; x <= archRadius; x++) {
+                for (int z = -halfWidth; z <= halfWidth; z++) {
+                    addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
                 }
             }
         }
 
-        // Generate arch (semicircle)
+        // Generate arch (semicircle) on top of the legs
         double radiusSquared = archRadius * archRadius;
         double innerRadiusSquared = hollow ? (archRadius - thickness) * (archRadius - thickness) : 0;
 
@@ -102,7 +94,6 @@ public class Arch extends Shape3D {
                 if (inArch) {
                     for (int z = -halfWidth; z <= halfWidth; z++) {
                         if (hollow) {
-                            // For hollow, only add if on z-edge or on the arch surface
                             boolean onZEdge = Math.abs(z) > halfWidth - thickness;
                             boolean onArchSurface = distSquared <= radiusSquared && distSquared > innerRadiusSquared;
                             if (onZEdge || onArchSurface) {

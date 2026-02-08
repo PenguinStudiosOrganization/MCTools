@@ -4,6 +4,11 @@ import com.mctools.MCTools;
 import org.bukkit.Material;
 import org.bukkit.configuration.file.FileConfiguration;
 
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
 /**
  * Centralized access to plugin configuration values.
  *
@@ -29,6 +34,7 @@ public class ConfigManager {
     private int maxBlocks;
     private int maxRadius;
     private int maxHeight;
+    private int maxThickness;
     private boolean asyncPlacement;
     private int blocksPerTick;
     private boolean enableUndo;
@@ -44,7 +50,20 @@ public class ConfigManager {
     private boolean previewEnabled;
     private int previewDuration;
     private Material previewBlock;
-    
+
+    // ETA bossbar
+    private boolean etaBossbarEnabled;
+    private int etaBossbarUpdateTicks;
+    private boolean etaBossbarShowPercent;
+
+    // Floating blocks cleanup (post-process)
+    private boolean floatingCleanupEnabled;
+    private int floatingCleanupBlocksPerTick;
+    private int floatingCleanupMaxBlocks;
+    private int floatingCleanupPadding;
+    private Set<Material> floatingCleanupWhitelist;
+    private Set<Material> floatingCleanupBlacklist;
+
     // Brush settings
     private boolean brushEnabled;
     private String brushPermission;
@@ -70,9 +89,10 @@ public class ConfigManager {
 
     private void loadValues() {
         // Shape generation
-        maxBlocks = config.getInt("max-blocks", 50000);
-        maxRadius = config.getInt("max-radius", 64);
+        maxBlocks = config.getInt("max-blocks", 500000);
+        maxRadius = config.getInt("max-radius", 128);
         maxHeight = config.getInt("max-height", 128);
+        maxThickness = config.getInt("max-thickness", 32);
         asyncPlacement = config.getBoolean("async-placement", true);
         blocksPerTick = config.getInt("blocks-per-tick", 1000);
         enableUndo = config.getBoolean("enable-undo", true);
@@ -87,14 +107,28 @@ public class ConfigManager {
         particleType = config.getString("particles.type", "HAPPY_VILLAGER");
         previewEnabled = config.getBoolean("preview.enabled", true);
         previewDuration = config.getInt("preview.duration", 10);
-        
+
         String previewBlockName = config.getString("preview.block", "LIME_STAINED_GLASS");
         try {
             previewBlock = Material.valueOf(previewBlockName);
         } catch (IllegalArgumentException e) {
             previewBlock = Material.LIME_STAINED_GLASS;
         }
-        
+
+        // ETA bossbar
+        etaBossbarEnabled = config.getBoolean("eta-bossbar.enabled", true);
+        etaBossbarUpdateTicks = Math.max(1, config.getInt("eta-bossbar.update-ticks", 10));
+        etaBossbarShowPercent = config.getBoolean("eta-bossbar.show-percent", true);
+
+        // Floating cleanup
+        floatingCleanupEnabled = config.getBoolean("floating-cleanup.enabled", true);
+        floatingCleanupBlocksPerTick = Math.max(10, config.getInt("floating-cleanup.blocks-per-tick", 2000));
+        floatingCleanupMaxBlocks = Math.max(0, config.getInt("floating-cleanup.max-blocks-scan", 250000));
+        floatingCleanupPadding = Math.max(0, config.getInt("floating-cleanup.padding", 2));
+
+        floatingCleanupWhitelist = parseMaterialList(config.getStringList("floating-cleanup.whitelist"));
+        floatingCleanupBlacklist = parseMaterialList(config.getStringList("floating-cleanup.blacklist"));
+
         // Brush settings
         brushEnabled = config.getBoolean("brush.enabled", true);
         brushPermission = config.getString("brush.permission", "mctools.brush");
@@ -104,7 +138,7 @@ public class ConfigManager {
         brushDefaultIntensity = config.getInt("brush.default-intensity", 50);
         brushDefaultMaxHeight = config.getInt("brush.default-max-height", 20);
         heightmapsFolder = config.getString("brush.heightmaps-folder", "heightmaps");
-        
+
         String defaultBlockName = config.getString("brush.default-block", "GRASS_BLOCK");
         try {
             brushDefaultBlock = Material.valueOf(defaultBlockName);
@@ -117,6 +151,7 @@ public class ConfigManager {
     public int getMaxBlocks() { return maxBlocks; }
     public int getMaxRadius() { return maxRadius; }
     public int getMaxHeight() { return maxHeight; }
+    public int getMaxThickness() { return maxThickness; }
     public boolean isAsyncPlacement() { return asyncPlacement; }
     public int getBlocksPerTick() { return blocksPerTick; }
     public boolean isUndoEnabled() { return enableUndo; }
@@ -132,7 +167,20 @@ public class ConfigManager {
     public boolean isPreviewEnabled() { return previewEnabled; }
     public int getPreviewDuration() { return previewDuration; }
     public Material getPreviewBlock() { return previewBlock; }
-    
+
+    // ETA bossbar getters
+    public boolean isEtaBossbarEnabled() { return etaBossbarEnabled; }
+    public int getEtaBossbarUpdateTicks() { return etaBossbarUpdateTicks; }
+    public boolean isEtaBossbarShowPercent() { return etaBossbarShowPercent; }
+
+    // Floating cleanup getters
+    public boolean isFloatingCleanupEnabled() { return floatingCleanupEnabled; }
+    public int getFloatingCleanupBlocksPerTick() { return floatingCleanupBlocksPerTick; }
+    public int getFloatingCleanupMaxBlocks() { return floatingCleanupMaxBlocks; }
+    public int getFloatingCleanupPadding() { return floatingCleanupPadding; }
+    public Set<Material> getFloatingCleanupWhitelist() { return floatingCleanupWhitelist; }
+    public Set<Material> getFloatingCleanupBlacklist() { return floatingCleanupBlacklist; }
+
     // Brush getters
     public boolean isBrushEnabled() { return brushEnabled; }
     public String getBrushPermission() { return brushPermission; }
@@ -143,4 +191,20 @@ public class ConfigManager {
     public int getBrushDefaultMaxHeight() { return brushDefaultMaxHeight; }
     public Material getBrushDefaultBlock() { return brushDefaultBlock; }
     public String getHeightmapsFolder() { return heightmapsFolder; }
+
+    private Set<Material> parseMaterialList(List<String> list) {
+        if (list == null || list.isEmpty()) return EnumSet.noneOf(Material.class);
+        Set<Material> set = EnumSet.noneOf(Material.class);
+        for (String raw : list) {
+            if (raw == null) continue;
+            String name = raw.trim().toUpperCase(Locale.ROOT);
+            if (name.isEmpty()) continue;
+            try {
+                set.add(Material.valueOf(name));
+            } catch (IllegalArgumentException ignored) {
+                // ignore invalid materials
+            }
+        }
+        return set;
+    }
 }

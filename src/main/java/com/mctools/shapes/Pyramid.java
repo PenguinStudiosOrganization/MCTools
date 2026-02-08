@@ -59,9 +59,11 @@ public class Pyramid extends Shape3D {
             for (int x = -currentSize; x <= currentSize; x++) {
                 for (int z = -currentSize; z <= currentSize; z++) {
                     if (hollow) {
-                        // Check if on the edge
+                        // Base layer (y=0) is always filled for hollow pyramids
+                        boolean isBase = (y == 0);
+                        // Check if on the edge (walls)
                         boolean isEdge = Math.abs(x) > innerSize || Math.abs(z) > innerSize;
-                        if (isEdge) {
+                        if (isBase || isEdge) {
                             addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
                         }
                     } else {

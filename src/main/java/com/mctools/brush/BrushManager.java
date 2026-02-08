@@ -11,10 +11,11 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Manages heightmap files and player brush settings.
- * 
- * @author MCTools Team
- * @version 1.0.0
+ * Manages heightmap files and per-player brush settings.
+ *
+ * <p>Loads heightmap images (.png/.jpg) from the plugin's heightmaps folder,
+ * caches them in memory, and provides access to per-player {@link BrushSettings}.
+ * Also owns the {@link TerrainBrush} instance used for terrain editing.</p>
  */
 public class BrushManager {
 
@@ -37,9 +38,6 @@ public class BrushManager {
         loadHeightmaps();
     }
 
-    /**
-     * Initializes the heightmaps folder.
-     */
     private void initializeHeightmapsFolder() {
         String folderName = plugin.getConfigManager().getHeightmapsFolder();
         heightmapsFolder = new File(plugin.getDataFolder(), folderName);
@@ -50,9 +48,6 @@ public class BrushManager {
         }
     }
 
-    /**
-     * Loads all heightmap files from the folder.
-     */
     public void loadHeightmaps() {
         availableHeightmaps.clear();
         heightmapCache.clear();
@@ -83,14 +78,10 @@ public class BrushManager {
             }
         }
 
-        // Sort alphabetically
         Collections.sort(availableHeightmaps);
         plugin.getLogger().info("Loaded " + availableHeightmaps.size() + " heightmaps.");
     }
 
-    /**
-     * Gets or creates brush settings for a player.
-     */
     public BrushSettings getSettings(UUID playerUuid) {
         return playerSettings.computeIfAbsent(playerUuid, uuid -> {
             var config = plugin.getConfigManager();
@@ -104,68 +95,44 @@ public class BrushManager {
         });
     }
 
-    /**
-     * Removes brush settings for a player.
-     */
     public void removeSettings(UUID playerUuid) {
         playerSettings.remove(playerUuid);
     }
 
-    /**
-     * Gets a heightmap image by name.
-     */
     public BufferedImage getHeightmap(String name) {
         return heightmapCache.get(name);
     }
 
-    /**
-     * Gets all available heightmap names.
-     */
     public List<String> getAvailableHeightmaps() {
         return new ArrayList<>(availableHeightmaps);
     }
 
-    /**
-     * Checks if a heightmap exists.
-     */
     public boolean hasHeightmap(String name) {
         return heightmapCache.containsKey(name);
     }
 
-    /**
-     * Gets the heightmaps folder.
-     */
     public File getHeightmapsFolder() {
         return heightmapsFolder;
     }
 
-    /**
-     * Reloads all heightmaps.
-     */
     public void reload() {
         initializeHeightmapsFolder();
         loadHeightmaps();
     }
 
-    /**
-     * Gets the height value from a heightmap at specific coordinates.
-     * Returns a value between 0.0 and 1.0.
-     */
+    /** Returns the height value (0.0–1.0) from a heightmap at normalized coordinates. */
     public double getHeightAt(BufferedImage heightmap, double normalizedX, double normalizedZ) {
         if (heightmap == null) return 0;
         
         int imgWidth = heightmap.getWidth();
         int imgHeight = heightmap.getHeight();
         
-        // Convert normalized coordinates (-1 to 1) to image coordinates
         int imgX = (int) ((normalizedX + 1) / 2 * (imgWidth - 1));
         int imgY = (int) ((normalizedZ + 1) / 2 * (imgHeight - 1));
         
-        // Clamp to image bounds
         imgX = Math.max(0, Math.min(imgWidth - 1, imgX));
         imgY = Math.max(0, Math.min(imgHeight - 1, imgY));
         
-        // Get pixel value (grayscale)
         int rgb = heightmap.getRGB(imgX, imgY);
         int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
         

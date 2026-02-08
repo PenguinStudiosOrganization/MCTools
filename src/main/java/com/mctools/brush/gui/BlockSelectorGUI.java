@@ -17,10 +17,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * GUI for selecting blocks for the brush.
- * 
- * @author MCTools Team
- * @version 1.0.0
+ * Paginated GUI for selecting the terrain brush block type.
+ * Displays common terrain blocks and allows navigation between pages.
  */
 public class BlockSelectorGUI implements InventoryHolder {
 
@@ -202,11 +200,7 @@ public class BlockSelectorGUI implements InventoryHolder {
         return null;
     }
 
-    /**
-     * Called when a block is selected. Override this to customize behavior.
-     */
     public void onBlockSelected(Material block) {
-        // Default implementation - can be overridden
     }
 
     @Override

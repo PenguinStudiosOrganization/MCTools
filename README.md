@@ -96,29 +96,17 @@ Apply color gradients to any shape using hex colors. Prefix any shape command wi
 
 **Wood types:** oak, spruce, birch, jungle, acacia, dark_oak, mangrove, cherry, crimson, warped
 
-### Admin & Utility Commands
+### Admin Commands
 
 ```
-/mct undo [count]        - Undo operations (up to 1000)
-/mct redo [count]        - Redo undone operations
-/mct cancel              - Cancel current operation
-/mct pause               - Pause current operation
-/mct resume              - Resume paused operation
-/mct performance         - Show server performance (10s, 1m, 10m, 1h) and calculate blocks/sec
-/mct center              - Find the center of a shape within a 200-block radius (experimental)
-/mct wand                - Get the MCTools Terrain Generator wand/brush
-/mct reload              - Reload configuration
-/mct help [shape]        - Show help
-/mct info                - Plugin information
-```
-
-### WorldEdit Integration (if installed)
-
-```
-/* WorldEdit undo/redo also work for MCTools operations */
-//undo [count]            - Undo
-//redo [count]            - Redo
-//wand                   - Prompts you to choose between the MCTools wand or the WorldEdit axe
+/mct undo [count]  - Undo operations (up to 1000)
+/mct redo [count]  - Redo undone operations
+/mct cancel        - Cancel current operation
+/mct pause         - Pause current operation
+/mct resume        - Resume paused operation
+/mct reload        - Reload configuration
+/mct help [shape]  - Show help
+/mct info          - Plugin information
 ```
 
 ### Terrain Brush

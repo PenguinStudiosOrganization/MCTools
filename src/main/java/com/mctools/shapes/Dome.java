@@ -46,7 +46,10 @@ public class Dome extends Shape3D {
         double centerZ = center.getBlockZ();
 
         double radiusSquared = radius * radius;
-        double innerRadiusSquared = hollow ? (radius - thickness) * (radius - thickness) : 0;
+        // Ensure thickness doesn't exceed radius for hollow dome
+        int effectiveThickness = hollow ? Math.min(thickness, radius) : thickness;
+        double innerRadius = Math.max(0, radius - effectiveThickness);
+        double innerRadiusSquared = innerRadius * innerRadius;
 
         for (int x = -radius; x <= radius; x++) {
             for (int y = 0; y <= radius; y++) { // Only positive Y (upper half)
@@ -54,7 +57,10 @@ public class Dome extends Shape3D {
                     double distSquared = x * x + y * y + z * z;
 
                     if (hollow) {
-                        if (distSquared <= radiusSquared && distSquared > innerRadiusSquared) {
+                        // Base layer (y=0) is filled for hollow domes
+                        boolean isBase = (y == 0);
+                        boolean isShell = distSquared <= radiusSquared && distSquared > innerRadiusSquared;
+                        if (isBase ? (distSquared <= radiusSquared) : isShell) {
                             addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
                         }
                     } else {

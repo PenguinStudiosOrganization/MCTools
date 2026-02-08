@@ -5,6 +5,13 @@ import com.mctools.brush.BrushSettings;
 import com.mctools.brush.gui.BlockSelectorGUI;
 import com.mctools.brush.gui.BrushGUI;
 import com.mctools.brush.gui.HeightmapSelectorGUI;
+import com.mctools.utils.MessageUtil;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.Location;
@@ -15,6 +22,7 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -285,5 +293,93 @@ public class PlayerListener implements Listener {
 
     private int clamp(int v, int min, int max) {
         return Math.max(min, Math.min(max, v));
+    }
+    
+    /**
+     * Intercepts //wand command from WorldEdit and offers a choice between
+     * WorldEdit wand and MCTools Terrain Brush wand.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onWorldEditWandCommand(PlayerCommandPreprocessEvent event) {
+        Player player = event.getPlayer();
+        String message = event.getMessage().toLowerCase().trim();
+        
+        // Check if it's the //wand command
+        if (!message.equals("//wand")) {
+            return;
+        }
+        
+        // Check if WorldEdit is installed
+        if (Bukkit.getPluginManager().getPlugin("WorldEdit") == null) {
+            return;
+        }
+        
+        // Check if player has MCTools brush permission
+        if (!player.hasPermission("mctools.brush")) {
+            return; // Let WorldEdit handle it normally
+        }
+        
+        // Cancel the original command
+        event.setCancelled(true);
+        
+        // Send beautiful choice message
+        sendWandChoiceMenu(player);
+    }
+    
+    /**
+     * Sends a simple wand selection menu to the player.
+     */
+    private void sendWandChoiceMenu(Player player) {
+        player.sendMessage("");
+        player.sendMessage("§e§lCHOOSE YOUR WAND");
+        player.sendMessage("");
+        
+        // WorldEdit option
+        Component weOption = Component.text("§6§l[WorldEdit] §7- §fWorldEdit's Wand")
+            .clickEvent(ClickEvent.runCommand("/mct worldeditwand"))
+            .hoverEvent(HoverEvent.showText(Component.text("Click to get WorldEdit Wand", NamedTextColor.YELLOW)));
+        player.sendMessage(weOption);
+        
+        // MCTools option
+        Component mctOption = Component.text("§a§l[MCTools] §7- §fMCTools' Brush")
+            .clickEvent(ClickEvent.runCommand("/mct wand"))
+            .hoverEvent(HoverEvent.showText(Component.text("Click to get MCTools Terrain Brush", NamedTextColor.GREEN)));
+        player.sendMessage(mctOption);
+        
+        player.sendMessage("");
+    }
+    
+    /**
+     * Gives the WorldEdit wand to a player using WorldEdit's API.
+     * Falls back to wooden axe if API is not available.
+     */
+    public void giveWorldEditWand(Player player) {
+        Material wandMaterial = Material.WOODEN_AXE; // Default fallback
+        
+        try {
+            // Try to use WorldEdit API to get the configured wand item
+            com.sk89q.worldedit.LocalConfiguration config = com.sk89q.worldedit.WorldEdit.getInstance().getConfiguration();
+            
+            // Get the wand item from WorldEdit config
+            String wandItem = config.wandItem;
+            
+            // Parse the item type (format is usually "minecraft:wooden_axe")
+            if (wandItem != null && !wandItem.isEmpty()) {
+                String itemName = wandItem.replace("minecraft:", "").toUpperCase().replace(" ", "_");
+                try {
+                    wandMaterial = Material.valueOf(itemName);
+                } catch (IllegalArgumentException ignored) {
+                    // Keep default wooden axe
+                }
+            }
+        } catch (NoClassDefFoundError | Exception ignored) {
+            // WorldEdit API not available, use default wooden axe
+        }
+        
+        // Create and give the wand
+        ItemStack wand = new ItemStack(wandMaterial);
+        player.getInventory().addItem(wand);
+        
+        plugin.getMessageUtil().sendInfo(player, "You received the WorldEdit Wand!");
     }
 }

@@ -65,7 +65,10 @@ public class Cone extends Shape3D {
                     double distSquared = x * x + z * z;
 
                     if (hollow) {
-                        if (distSquared <= currentRadiusSquared && distSquared > innerRadiusSquared) {
+                        // Base layer (y=0) is always filled for hollow cones
+                        boolean isBase = (y == 0);
+                        boolean isWall = distSquared <= currentRadiusSquared && distSquared > innerRadiusSquared;
+                        if (isBase ? (distSquared <= currentRadiusSquared) : isWall) {
                             addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
                         }
                     } else {

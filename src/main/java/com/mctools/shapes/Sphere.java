@@ -46,7 +46,10 @@ public class Sphere extends Shape3D {
         double centerZ = center.getBlockZ();
 
         double radiusSquared = radius * radius;
-        double innerRadiusSquared = hollow ? (radius - thickness) * (radius - thickness) : 0;
+        // Ensure thickness doesn't exceed radius for hollow sphere
+        int effectiveThickness = hollow ? Math.min(thickness, radius) : thickness;
+        double innerRadius = Math.max(0, radius - effectiveThickness);
+        double innerRadiusSquared = innerRadius * innerRadius;
 
         for (int x = -radius; x <= radius; x++) {
             for (int y = -radius; y <= radius; y++) {
@@ -55,11 +58,13 @@ public class Sphere extends Shape3D {
 
                     if (hollow) {
                         if (distSquared <= radiusSquared && distSquared > innerRadiusSquared) {
-                            addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
+                            // Offset Y by radius so sphere sits on ground
+                            addBlock(blocks, world, centerX, centerY, centerZ, x, y + radius, z);
                         }
                     } else {
                         if (distSquared <= radiusSquared) {
-                            addBlock(blocks, world, centerX, centerY, centerZ, x, y, z);
+                            // Offset Y by radius so sphere sits on ground
+                            addBlock(blocks, world, centerX, centerY, centerZ, x, y + radius, z);
                         }
                     }
                 }

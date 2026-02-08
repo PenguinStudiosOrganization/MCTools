@@ -46,7 +46,10 @@ public class Circle extends Shape2D {
         double centerZ = center.getBlockZ();
 
         double radiusSquared = radius * radius;
-        double innerRadiusSquared = hollow ? (radius - thickness) * (radius - thickness) : 0;
+        // Ensure thickness doesn't exceed radius for hollow circle
+        int effectiveThickness = hollow ? Math.min(thickness, radius) : thickness;
+        double innerRadius = Math.max(0, radius - effectiveThickness);
+        double innerRadiusSquared = innerRadius * innerRadius;
 
         for (int x = -radius; x <= radius; x++) {
             for (int z = -radius; z <= radius; z++) {
