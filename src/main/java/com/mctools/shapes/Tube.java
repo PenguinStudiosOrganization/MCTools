@@ -63,7 +63,7 @@ public class Tube extends Shape3D {
 
     @Override
     public String getUsage() {
-        return "/mct tube <block> <height> <radius> <innerRadius>";
+        return "/mct tube <block> <radius> <height> <innerRadius>";
     }
 
     @Override

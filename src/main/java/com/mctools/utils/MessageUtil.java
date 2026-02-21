@@ -6,47 +6,71 @@ import org.bukkit.entity.Player;
 
 /**
  * Utility class for handling message formatting using MiniMessage.
- * 
- * <p>Provides consistent styling across all plugin messages with
+ *
+ * <p>Provides consistent, modern styling across all plugin messages with
  * support for gradients, colors, and special formatting.</p>
- * 
- * <p>Color scheme:</p>
+ *
+ * <p>Color palette — minimal, modern, high-contrast:</p>
  * <ul>
- *   <li>Command (cmd): Green #10b981</li>
- *   <li>Block: Orange #f97316</li>
- *   <li>Radius: Red #ef4444</li>
- *   <li>Height: Blue #3b82f6</li>
- *   <li>Thickness: Purple #a855f7</li>
+ *   <li>Primary / Accent: Emerald #34d399 → #10b981</li>
+ *   <li>Command (cmd): Teal #2dd4bf</li>
+ *   <li>Block: Amber #fbbf24</li>
+ *   <li>Radius/Size: Rose #fb7185</li>
+ *   <li>Height/Turns: Sky #38bdf8</li>
+ *   <li>Thickness: Violet #a78bfa</li>
+ *   <li>Road mode: Amber #f59e0b</li>
+ *   <li>Bridge mode: Cyan #22d3ee</li>
+ *   <li>Curve mode: Pink #f472b6</li>
  * </ul>
- * 
+ *
  * @author MCTools Team
- * @version 1.0.0
+ * @version 2.0.0
  */
 public class MessageUtil {
 
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
-    
-    /** The plugin message prefix with gradient styling */
-    private static final String PREFIX = "<gradient:#10b981:#059669><bold>MCTools</bold></gradient> <dark_gray>│</dark_gray> ";
 
-    // Color constants for parameters
-    public static final String CMD_COLOR = "#10b981";      // Green
-    public static final String BLOCK_COLOR = "#f97316";    // Orange
-    public static final String RADIUS_COLOR = "#ef4444";   // Red
-    public static final String HEIGHT_COLOR = "#3b82f6";   // Blue
-    public static final String THICK_COLOR = "#a855f7";    // Purple
-    public static final String OPTIONAL_COLOR = "#52525b"; // Gray
-    public static final String TEXT_COLOR = "#a1a1aa";     // Light gray
+    // ── Prefix ──────────────────────────────────────────────────────────
+    /** Clean, minimal prefix with a thin vertical bar separator */
+    private static final String PREFIX =
+            "<gradient:#34d399:#10b981><bold>MCT</bold></gradient> <#3f3f46>│</#3f3f46> ";
 
-    /** Fallback message shown when MiniMessage parsing fails. */
-    private static final String FALLBACK_MESSAGE = "§7Messaggio non disponibile, gentilmente contatta il supporto §b§nhttps://discord.penguinstudios.eu/";
+    // ── Parameter colors ────────────────────────────────────────────────
+    public static final String CMD_COLOR      = "#2dd4bf";   // Teal
+    public static final String BLOCK_COLOR    = "#fbbf24";   // Amber
+    public static final String RADIUS_COLOR   = "#fb7185";   // Rose
+    public static final String HEIGHT_COLOR   = "#38bdf8";   // Sky
+    public static final String THICK_COLOR    = "#a78bfa";   // Violet
+    public static final String OPTIONAL_COLOR = "#71717a";   // Zinc-500
+    public static final String TEXT_COLOR     = "#a1a1aa";   // Zinc-400
+
+    // ── Mode colors (path tools) ────────────────────────────────────────
+    public static final String ROAD_COLOR   = "#f59e0b";    // Amber
+    public static final String BRIDGE_COLOR = "#22d3ee";    // Cyan
+    public static final String CURVE_COLOR  = "#f472b6";    // Pink
+
+    // ── Semantic colors ─────────────────────────────────────────────────
+    public static final String SUCCESS_COLOR = "#34d399";   // Emerald-400
+    public static final String ERROR_COLOR   = "#fb7185";   // Rose-400
+    public static final String WARN_COLOR    = "#fbbf24";   // Amber-400
+    public static final String INFO_COLOR    = "#38bdf8";   // Sky-400
+    public static final String ACCENT_COLOR  = "#a78bfa";   // Violet-400
+    public static final String MUTED_COLOR   = "#52525b";   // Zinc-600
+    public static final String VALUE_COLOR   = "white";     // White for values
+    public static final String DIM_COLOR     = "#3f3f46";   // Zinc-700 (separators)
+
+    // ── Unicode helpers ─────────────────────────────────────────────────
+    private static final String SEP  = " <" + DIM_COLOR + ">│</" + DIM_COLOR + "> ";
+    private static final String DOT  = "<" + DIM_COLOR + ">•</" + DIM_COLOR + "> ";
+    private static final String DASH = " <" + DIM_COLOR + ">—</" + DIM_COLOR + "> ";
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Core parsing
+    // ═══════════════════════════════════════════════════════════════════
 
     /**
      * Parses a MiniMessage string into a Component.
      * Falls back to a plain error message if parsing fails.
-     * 
-     * @param message The MiniMessage formatted string
-     * @return The parsed Component
      */
     public Component parse(String message) {
         try {
@@ -58,73 +82,66 @@ public class MessageUtil {
 
     /**
      * Parses a message with the plugin prefix.
-     * 
-     * @param message The message to prefix
-     * @return The parsed Component with prefix
      */
     public Component parseWithPrefix(String message) {
         try {
             return MINI_MESSAGE.deserialize(PREFIX + message);
         } catch (Exception e) {
-            return Component.text("§a§lMCTools §7│ " + stripLegacyCodes(message));
+            return Component.text("§a§lMCT §7│ " + stripLegacyCodes(message));
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    //  Semantic message senders
+    // ═══════════════════════════════════════════════════════════════════
+
     /**
-     * Sends a success message to a player.
-     * 
-     * @param player The player to send the message to
-     * @param shape The shape that was generated
-     * @param blockCount The number of blocks placed
+     * Sends a success message after a shape/operation completes.
      */
     public void sendSuccess(Player player, String shape, int blockCount) {
         try {
-            String message = PREFIX + "<" + TEXT_COLOR + ">Generated <" + CMD_COLOR + "><bold>" + shape + 
-                    "</bold></" + CMD_COLOR + "> with <" + CMD_COLOR + ">" + blockCount + "</" + CMD_COLOR + "> blocks";
+            String message = PREFIX
+                    + "<" + SUCCESS_COLOR + ">✔</" + SUCCESS_COLOR + "> "
+                    + "<white>" + shape + "</white> "
+                    + "<" + TEXT_COLOR + ">completed</" + TEXT_COLOR + ">"
+                    + DASH
+                    + "<white>" + String.format("%,d", blockCount) + "</white> "
+                    + "<" + TEXT_COLOR + ">blocks</" + TEXT_COLOR + ">";
             player.sendMessage(MINI_MESSAGE.deserialize(message));
         } catch (Exception e) {
-            player.sendMessage("§a§lMCTools §7│ §aGenerated §f" + shape + " §awith §f" + blockCount + " §ablocks");
+            player.sendMessage("§a§lMCT §7│ §a✔ " + shape + " §7completed — §f" + blockCount + " §7blocks");
         }
     }
 
     /**
      * Sends an error message to a player.
-     * 
-     * @param player The player to send the message to
-     * @param message The error message
      */
     public void sendError(Player player, String message) {
         try {
-            // Sanitize legacy § codes that break MiniMessage
             String sanitized = sanitizeForMiniMessage(message);
-            String formatted = PREFIX + "<#ef4444>✗</#ef4444> <" + TEXT_COLOR + ">" + sanitized;
+            String formatted = PREFIX
+                    + "<" + ERROR_COLOR + ">✘ " + sanitized + "</" + ERROR_COLOR + ">";
             player.sendMessage(MINI_MESSAGE.deserialize(formatted));
         } catch (Exception e) {
-            player.sendMessage("§a§lMCTools §7│ §c✗ " + message);
+            player.sendMessage("§a§lMCT §7│ §c✘ " + message);
         }
     }
 
     /**
      * Sends an info message to a player.
-     * 
-     * @param player The player to send the message to
-     * @param message The info message
      */
     public void sendInfo(Player player, String message) {
         try {
             String sanitized = sanitizeForMiniMessage(message);
-            String formatted = PREFIX + "<#3b82f6>ℹ</#3b82f6> <" + TEXT_COLOR + ">" + sanitized;
+            String formatted = PREFIX + "<" + TEXT_COLOR + ">" + sanitized + "</" + TEXT_COLOR + ">";
             player.sendMessage(MINI_MESSAGE.deserialize(formatted));
         } catch (Exception e) {
-            player.sendMessage("§a§lMCTools §7│ §bℹ §7" + message);
+            player.sendMessage("§a§lMCT §7│ §7" + message);
         }
     }
 
     /**
      * Sends an info message to a player by UUID.
-     * 
-     * @param uuid The UUID of the player
-     * @param message The info message
      */
     public void sendInfo(java.util.UUID uuid, String message) {
         Player player = org.bukkit.Bukkit.getPlayer(uuid);
@@ -137,108 +154,99 @@ public class MessageUtil {
      * Sends a raw MiniMessage-formatted message with the plugin prefix.
      * Unlike sendInfo(), this does NOT wrap the message in TEXT_COLOR,
      * allowing the caller to provide fully custom-colored content.
-     *
-     * @param player  The player to send the message to
-     * @param miniMsg The MiniMessage formatted string (colors included)
      */
     public void sendRaw(Player player, String miniMsg) {
         try {
             String formatted = PREFIX + miniMsg;
             player.sendMessage(MINI_MESSAGE.deserialize(formatted));
         } catch (Exception e) {
-            player.sendMessage("§a§lMCTools §7│ §7" + stripLegacyCodes(miniMsg));
+            player.sendMessage("§a§lMCT §7│ §7" + stripLegacyCodes(miniMsg));
         }
     }
 
     /**
      * Sends a warning message to a player.
-     * 
-     * @param player The player to send the message to
-     * @param message The warning message
      */
     public void sendWarning(Player player, String message) {
         try {
             String sanitized = sanitizeForMiniMessage(message);
-            String formatted = PREFIX + "<#f97316>⚠</#f97316> <" + TEXT_COLOR + ">" + sanitized;
+            String formatted = PREFIX
+                    + "<" + WARN_COLOR + ">⚠ " + sanitized + "</" + WARN_COLOR + ">";
             player.sendMessage(MINI_MESSAGE.deserialize(formatted));
         } catch (Exception e) {
-            player.sendMessage("§a§lMCTools §7│ §6⚠ §7" + message);
+            player.sendMessage("§a§lMCT §7│ §6⚠ " + message);
         }
     }
 
-    /**
-     * Sanitizes a string containing legacy § color codes for use with MiniMessage.
-     * Strips § codes since MiniMessage doesn't support them.
-     */
+    // ═══════════════════════════════════════════════════════════════════
+    //  Sanitisation helpers
+    // ═══════════════════════════════════════════════════════════════════
+
     private String sanitizeForMiniMessage(String input) {
         if (input == null) return "";
-        // Replace legacy § codes with empty string for MiniMessage compatibility
         return input.replaceAll("§[0-9a-fk-or]", "");
     }
 
-    /**
-     * Strips legacy color codes from a string for plain text fallback.
-     */
     private String stripLegacyCodes(String input) {
         if (input == null) return "";
         return input.replaceAll("§[0-9a-fk-or]", "")
-                     .replaceAll("<[^>]+>", ""); // Also strip MiniMessage tags
+                .replaceAll("<[^>]+>", "");
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    //  Specialised senders
+    // ═══════════════════════════════════════════════════════════════════
+
     /**
-     * Sends a preview message to a player.
-     * 
-     * @param player The player to send the message to
-     * @param seconds Seconds until generation starts
+     * Sends a preview countdown message.
      */
     public void sendPreview(Player player, int seconds) {
-        String formatted = PREFIX + "<" + CMD_COLOR + ">⬡</" + CMD_COLOR + "> <" + TEXT_COLOR + ">Preview mode - Generation starts in <" + CMD_COLOR + ">" + seconds + "</" + CMD_COLOR + "> seconds...";
+        String formatted = PREFIX
+                + "<" + TEXT_COLOR + ">Preview mode</" + TEXT_COLOR + ">"
+                + DASH
+                + "<" + TEXT_COLOR + ">generating in </" + TEXT_COLOR + ">"
+                + "<" + SUCCESS_COLOR + ">" + seconds + "s</" + SUCCESS_COLOR + ">";
         player.sendMessage(MINI_MESSAGE.deserialize(formatted));
     }
 
     /**
      * Sends a progress bar to a player.
-     * 
-     * @param player The player to send the progress to
-     * @param progress The progress value (0-20)
-     * @param percent The percentage complete
      */
     public void sendProgress(Player player, int progress, int percent) {
         progress = Math.max(0, Math.min(20, progress));
         String filled = "█".repeat(progress);
         String empty = "░".repeat(20 - progress);
-        String message = PREFIX + "<#52525b>[<" + CMD_COLOR + ">" + filled + "</" + CMD_COLOR + "><#27272a>" + 
-                empty + "</#27272a>]</#52525b> <" + TEXT_COLOR + ">" + percent + "%";
+        String message = PREFIX
+                + "<" + DIM_COLOR + ">[</" + DIM_COLOR + ">"
+                + "<" + SUCCESS_COLOR + ">" + filled + "</" + SUCCESS_COLOR + ">"
+                + "<" + MUTED_COLOR + ">" + empty + "</" + MUTED_COLOR + ">"
+                + "<" + DIM_COLOR + ">]</" + DIM_COLOR + "> "
+                + "<white>" + percent + "%</white>";
         player.sendMessage(MINI_MESSAGE.deserialize(message));
     }
 
     /**
      * Sends the help header to a player.
-     * 
-     * @param player The player to send the header to
      */
     public void sendHelpHeader(Player player) {
-        String header = "<newline><gradient:#10b981:#059669><bold>━━━ MCTools Help ━━━</bold></gradient><newline>";
+        String header = "\n"
+                + "<gradient:#34d399:#10b981><bold>━━━ MCTools Help ━━━</bold></gradient>"
+                + "\n";
         player.sendMessage(MINI_MESSAGE.deserialize(header));
     }
 
     /**
      * Sends a help command entry to a player with colored parameters.
-     * 
-     * @param player The player to send the entry to
-     * @param command The command (will be colored green)
-     * @param description The command description
      */
     public void sendHelpCommand(Player player, String command, String description) {
-        String message = "<" + CMD_COLOR + ">/" + command + "</" + CMD_COLOR + "> <#52525b>-</#52525b> <" + TEXT_COLOR + ">" + description;
+        String message = "  <" + CMD_COLOR + ">/" + command + "</" + CMD_COLOR + ">"
+                + DASH
+                + "<" + TEXT_COLOR + ">" + description + "</" + TEXT_COLOR + ">";
         player.sendMessage(MINI_MESSAGE.deserialize(message));
     }
 
     /**
      * Sends a formatted command syntax to a player.
-     * 
-     * @param player The player to send the syntax to
-     * @param syntax The pre-formatted syntax string
      */
     public void sendCommandSyntax(Player player, String syntax) {
         player.sendMessage(MINI_MESSAGE.deserialize(syntax));
@@ -246,21 +254,40 @@ public class MessageUtil {
 
     /**
      * Sends a usage message to a player.
-     * 
-     * @param player The player to send the usage to
-     * @param usage The usage syntax
      */
     public void sendUsage(Player player, String usage) {
-        String message = PREFIX + "<#f97316>Usage:</#f97316> <" + TEXT_COLOR + ">" + usage;
+        String message = PREFIX
+                + "<" + TEXT_COLOR + ">Usage: </" + TEXT_COLOR + ">"
+                + "<white>" + usage + "</white>";
         player.sendMessage(MINI_MESSAGE.deserialize(message));
     }
 
     /**
+     * Sends an "unknown argument" error to a player.
+     */
+    public void sendUnknownArgument(Player player, String argument) {
+        try {
+            String sanitized = sanitizeForMiniMessage(argument);
+            String formatted = PREFIX
+                    + "<" + ERROR_COLOR + ">✘</" + ERROR_COLOR + "> "
+                    + "<" + TEXT_COLOR + ">Unknown argument </" + TEXT_COLOR + ">"
+                    + "<white>\"" + sanitized + "\"</white>"
+                    + "<" + TEXT_COLOR + ">. See </" + TEXT_COLOR + ">"
+                    + "<" + INFO_COLOR + "><underlined><click:open_url:'https://github.com/PenguinStudiosOrganization/MCTools'>wiki</click></underlined></" + INFO_COLOR + ">"
+                    + " <" + TEXT_COLOR + ">or </" + TEXT_COLOR + ">"
+                    + "<" + CMD_COLOR + ">/mct help</" + CMD_COLOR + ">";
+            player.sendMessage(MINI_MESSAGE.deserialize(formatted));
+        } catch (Exception e) {
+            player.sendMessage("§a§lMCT §7│ §c✘ Unknown argument \"§f" + argument + "§c\". See the wiki or use §a/mct help");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  Formatting builders
+    // ═══════════════════════════════════════════════════════════════════
+
+    /**
      * Formats a command parameter with the appropriate color.
-     * 
-     * @param param The parameter name
-     * @param color The color to use
-     * @return The formatted parameter string
      */
     public String colorParam(String param, String color) {
         return "<" + color + ">" + param + "</" + color + ">";
@@ -268,10 +295,6 @@ public class MessageUtil {
 
     /**
      * Formats a required parameter for display.
-     * 
-     * @param param The parameter name
-     * @param color The color to use
-     * @return The formatted parameter string
      */
     public String formatRequired(String param, String color) {
         return "<" + color + "><" + param + "></" + color + ">";
@@ -279,9 +302,6 @@ public class MessageUtil {
 
     /**
      * Formats an optional parameter for display.
-     * 
-     * @param param The parameter name
-     * @return The formatted parameter string
      */
     public String formatOptional(String param) {
         return "<" + OPTIONAL_COLOR + ">[" + param + "]</" + OPTIONAL_COLOR + ">";
@@ -289,25 +309,34 @@ public class MessageUtil {
 
     /**
      * Gets the raw prefix string.
-     * 
-     * @return The prefix string
      */
     public String getPrefix() {
         return PREFIX;
     }
 
     /**
+     * Returns the color for a path mode name.
+     */
+    public static String getModeColor(String mode) {
+        return switch (mode.toLowerCase()) {
+            case "road" -> ROAD_COLOR;
+            case "bridge" -> BRIDGE_COLOR;
+            case "curve" -> CURVE_COLOR;
+            default -> CMD_COLOR;
+        };
+    }
+
+    /**
      * Builds a colored command syntax string.
-     * Example: /mct cir <block> <radius>
+     * Example: /mct cir &lt;block&gt; &lt;radius&gt;
      */
     public String buildSyntax(String cmd, String... params) {
         StringBuilder sb = new StringBuilder();
         sb.append("<").append(CMD_COLOR).append(">/").append(cmd).append("</").append(CMD_COLOR).append(">");
-        
+
         for (String param : params) {
             sb.append(" ");
             if (param.startsWith("[")) {
-                // Optional parameter
                 sb.append("<").append(OPTIONAL_COLOR).append(">").append(param).append("</").append(OPTIONAL_COLOR).append(">");
             } else if (param.equals("<block>")) {
                 sb.append("<").append(BLOCK_COLOR).append(">").append(param).append("</").append(BLOCK_COLOR).append(">");
@@ -321,7 +350,70 @@ public class MessageUtil {
                 sb.append("<").append(TEXT_COLOR).append(">").append(param).append("</").append(TEXT_COLOR).append(">");
             }
         }
-        
+
         return sb.toString();
+    }
+
+    /**
+     * Builds a section header line for help pages and info displays.
+     * Uses a gradient with the given colors and modern box-drawing chars.
+     */
+    public String buildHeader(String title, String color1, String color2) {
+        return "<gradient:" + color1 + ":" + color2 + "><bold>━━━ " + title + " ━━━</bold></gradient>";
+    }
+
+    /**
+     * Builds a section header using the default emerald gradient.
+     */
+    public String buildHeader(String title) {
+        return buildHeader(title, "#34d399", "#10b981");
+    }
+
+    /**
+     * Builds a key-value detail line for info displays.
+     * Uses a bullet point and clean alignment.
+     */
+    public String buildDetail(String key, String value) {
+        return "  " + DOT + "<" + TEXT_COLOR + ">" + key + "</" + TEXT_COLOR + "> "
+                + "<" + DIM_COLOR + ">→</" + DIM_COLOR + "> "
+                + "<white>" + value + "</white>";
+    }
+
+    /**
+     * Builds a category label for help sections.
+     */
+    public String buildCategory(String label, String color) {
+        return "<" + color + "><bold>" + label + "</bold></" + color + ">";
+    }
+
+    /**
+     * Builds a category label using the default amber color.
+     */
+    public String buildCategory(String label) {
+        return buildCategory(label, BLOCK_COLOR);
+    }
+
+    /**
+     * Builds a help entry line: command + description, with proper spacing.
+     * Intended for use inside help pages.
+     */
+    public String buildHelpEntry(String syntax, String description) {
+        return "  " + syntax + DASH + "<" + TEXT_COLOR + ">" + description + "</" + TEXT_COLOR + ">";
+    }
+
+    /**
+     * Builds a muted hint/example line.
+     */
+    public String buildHint(String text) {
+        return "    <" + MUTED_COLOR + "><italic>" + text + "</italic></" + MUTED_COLOR + ">";
+    }
+
+    /**
+     * Builds a bullet-point list item.
+     */
+    public String buildBullet(String label, String description) {
+        return "  " + DOT + "<gray>" + label + "</gray>"
+                + DASH
+                + "<" + TEXT_COLOR + ">" + description + "</" + TEXT_COLOR + ">";
     }
 }

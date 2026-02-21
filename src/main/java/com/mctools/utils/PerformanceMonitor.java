@@ -87,12 +87,12 @@ public class PerformanceMonitor {
     public record WindowAverage(String label, double avgTps, double avgMspt, double avgRamPercent, int avgBpt, int sampleCount) {}
 
     public enum PerformanceState {
-        EXCELLENT("§a⚡⚡", "§aExcellent", "<green>⚡⚡</green>", "<green>Excellent</green>", 1.0),
-        GOOD("§a⚡", "§aGood", "<green>⚡</green>", "<green>Good</green>", 0.8),
-        MEDIUM("§e◆", "§eMedium", "<yellow>◆</yellow>", "<yellow>Medium</yellow>", 0.5),
-        LOW("§6◇", "§6Low", "<gold>◇</gold>", "<gold>Low</gold>", 0.25),
-        CRITICAL("§c⚠", "§cCritical", "<red>⚠</red>", "<red>Critical</red>", 0.1),
-        EMERGENCY("§4☠", "§4EMERGENCY", "<dark_red>☠</dark_red>", "<dark_red>EMERGENCY</dark_red>", 0.0);
+        EXCELLENT("§a++", "§aExcellent", "<green>++</green>", "<green>Excellent</green>", 1.0),
+        GOOD("§a+", "§aGood", "<green>+</green>", "<green>Good</green>", 0.8),
+        MEDIUM("§e~", "§eMedium", "<yellow>~</yellow>", "<yellow>Medium</yellow>", 0.5),
+        LOW("§6-", "§6Low", "<gold>-</gold>", "<gold>Low</gold>", 0.25),
+        CRITICAL("§c!", "§cCritical", "<red>!</red>", "<red>Critical</red>", 0.1),
+        EMERGENCY("§4!!", "§4EMERGENCY", "<dark_red>!!</dark_red>", "<dark_red>EMERGENCY</dark_red>", 0.0);
 
         public final String icon;
         public final String name;
@@ -439,7 +439,7 @@ public class PerformanceMonitor {
         String ramColor = ramUsagePercent >= RAM_DANGER ? "red" : (ramUsagePercent >= RAM_WARNING ? "gold" : "green");
         int ramPercent = (int) (ramUsagePercent * 100);
 
-        return "<dark_gray>┃</dark_gray> " + currentState.iconMini + " " + currentState.nameMini +
+        return "<dark_gray>|</dark_gray> " + currentState.iconMini + " " + currentState.nameMini +
                 " <dark_gray>│</dark_gray> <gray>TPS:</gray> <" + tpsColor + ">" + String.format("%.1f", averageTps) + "</" + tpsColor + ">" +
                 " <dark_gray>│</dark_gray> <gray>RAM:</gray> <" + ramColor + ">" + ramPercent + "%</" + ramColor + ">" +
                 " <dark_gray>│</dark_gray> <gray>Speed:</gray> <white>" + blocksPerTick + "</white><gray>/t</gray>";

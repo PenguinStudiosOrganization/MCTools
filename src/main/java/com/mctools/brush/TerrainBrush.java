@@ -26,6 +26,7 @@ import org.bukkit.scheduler.BukkitTask;
 import java.awt.image.BufferedImage;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Terrain editing brush based on a grayscale heightmap.
@@ -59,6 +60,13 @@ public class TerrainBrush {
     private static final Material PREVIEW_BLOCK = Material.LIME_STAINED_GLASS;
     private static final Material PREVIEW_REMOVE_BLOCK = Material.RED_STAINED_GLASS; // For blocks to be removed
     private static final int PREVIEW_TIMEOUT_SECONDS = 5;
+
+    // Per-generation variation: each brush stroke gets unique jitter/rotation
+    // so repeated applications on the same spot produce slightly different results.
+    private static final double POSITION_JITTER_MAX = 0.35;   // max UV offset (fraction of image)
+    private static final double ROTATION_JITTER_MAX = 15.0;   // max extra rotation in degrees
+    private static final double HEIGHT_JITTER_MAX = 0.12;     // max per-block height variation (fraction)
+    private final AtomicLong generationCounter = new AtomicLong(System.nanoTime());
 
     // Per-player preview state.
     private final Map<UUID, PreviewState> playerPreviews = new ConcurrentHashMap<>();
@@ -661,6 +669,50 @@ public class TerrainBrush {
      *   <li>apply/undo operations consistently</li>
      * </ul>
      */
+    /**
+     * Simple hash-based PRNG for per-generation variation.
+     * Produces deterministic but unique values for each generation counter.
+     */
+    private double genRandom(long seed, int channel) {
+        long t = seed + channel * 0x6D2B79F5L;
+        t = (t ^ (t >>> 15)) * (t | 1);
+        t ^= t + ((t ^ (t >>> 7)) * (t | 61));
+        return ((t ^ (t >>> 14)) & 0xFFFFFFFFL) / 4294967296.0;
+    }
+
+    /**
+     * Bicubic interpolation for smoother heightmap sampling.
+     * Uses Catmull-Rom spline for high-quality sub-pixel reads.
+     */
+    private double sampleBicubic(BufferedImage img, double x, double y) {
+        int w = img.getWidth(), h = img.getHeight();
+        int xi = (int) Math.floor(x);
+        int yi = (int) Math.floor(y);
+        double fx = x - xi;
+        double fy = y - yi;
+
+        double[] cols = new double[4];
+        for (int j = -1; j <= 2; j++) {
+            double[] row = new double[4];
+            for (int i = -1; i <= 2; i++) {
+                int sx = Math.max(0, Math.min(xi + i, w - 1));
+                int sy = Math.max(0, Math.min(yi + j, h - 1));
+                row[i + 1] = getBrightness(img, sx, sy);
+            }
+            cols[j + 1] = cubicInterp(row[0], row[1], row[2], row[3], fx);
+        }
+        return Math.max(0, Math.min(1, cubicInterp(cols[0], cols[1], cols[2], cols[3], fy)));
+    }
+
+    /** Catmull-Rom cubic interpolation. */
+    private double cubicInterp(double p0, double p1, double p2, double p3, double t) {
+        double a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+        double b = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
+        double c = -0.5 * p0 + 0.5 * p2;
+        double d = p1;
+        return ((a * t + b) * t + c) * t + d;
+    }
+
     private List<BlockChange> calculateChanges(Location center, BrushSettings settings, float playerYaw) {
         World world = center.getWorld();
         if (world == null) return Collections.emptyList();
@@ -683,7 +735,16 @@ public class TerrainBrush {
         int extSize = size + EDGE_BLEND_RADIUS;
         int worldW = extSize * 2;
 
-        double rotAngle = autoRotate ? Math.toRadians(-playerYaw) : 0;
+        // ── Per-generation variation ──
+        // Each brush stroke gets a unique seed so the same heightmap produces
+        // slightly different terrain every time (position offset, micro-rotation,
+        // per-block height jitter). The overall shape stays recognizable.
+        long genSeed = generationCounter.incrementAndGet();
+        double uvOffsetX = (genRandom(genSeed, 0) * 2.0 - 1.0) * POSITION_JITTER_MAX;
+        double uvOffsetZ = (genRandom(genSeed, 1) * 2.0 - 1.0) * POSITION_JITTER_MAX;
+        double extraRotDeg = (genRandom(genSeed, 2) * 2.0 - 1.0) * ROTATION_JITTER_MAX;
+
+        double rotAngle = autoRotate ? Math.toRadians(-playerYaw + extraRotDeg) : Math.toRadians(extraRotDeg);
         double cos = Math.cos(rotAngle);
         double sin = Math.sin(rotAngle);
 
@@ -766,16 +827,28 @@ public class TerrainBrush {
                     continue;
                 }
                 
-                double rotX = autoRotate ? normX * cos - normZ * sin : normX;
-                double rotZ = autoRotate ? normX * sin + normZ * cos : normZ;
+                // Apply rotation (player yaw + per-generation micro-rotation)
+                double rotX = normX * cos - normZ * sin;
+                double rotZ = normX * sin + normZ * cos;
                 
-                double imgX = (rotX + 1.0) / 2.0 * (imgW - 1);
-                double imgZ = (rotZ + 1.0) / 2.0 * (imgH - 1);
+                // Apply per-generation UV offset for position variation
+                double jitteredX = rotX + uvOffsetX;
+                double jitteredZ = rotZ + uvOffsetZ;
+                
+                double imgX = (jitteredX + 1.0) / 2.0 * (imgW - 1);
+                double imgZ = (jitteredZ + 1.0) / 2.0 * (imgH - 1);
                 
                 double heightVal = 0;
                 if (imgX >= 0 && imgX < imgW && imgZ >= 0 && imgZ < imgH) {
-                    heightVal = sampleBilinear(heightmap, imgX, imgZ);
+                    // Use bicubic interpolation for smoother, more accurate sampling
+                    heightVal = sampleBicubic(heightmap, imgX, imgZ);
                 }
+                
+                // Per-block height jitter: subtle variation so each generation
+                // shifts individual block heights slightly (keeps overall shape)
+                long blockHash = ((long) wx * 73856093L) ^ ((long) wz * 19349663L) ^ genSeed;
+                double blockJitter = 1.0 + (genRandom(blockHash, 3) * 2.0 - 1.0) * HEIGHT_JITTER_MAX;
+                heightVal *= blockJitter;
                 
                 // Brush circle falloff
                 double effectiveMaxDist = circular ? (1.0 - MOUNTAIN_EDGE_MARGIN) : (Math.sqrt(2) - MOUNTAIN_EDGE_MARGIN);

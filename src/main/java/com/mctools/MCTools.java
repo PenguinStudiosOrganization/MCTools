@@ -5,6 +5,8 @@ import com.mctools.commands.MCBrushCommand;
 import com.mctools.commands.MCToolsCommand;
 import com.mctools.commands.MCToolsTabCompleter;
 import com.mctools.listeners.PlayerListener;
+import com.mctools.path.PathToolManager;
+import com.mctools.schematic.SchematicManager;
 import com.mctools.utils.BlockPlacer;
 import com.mctools.utils.ConfigManager;
 import com.mctools.utils.MessageUtil;
@@ -33,8 +35,10 @@ public final class MCTools extends JavaPlugin {
     private UndoManager undoManager;
     private MessageUtil messageUtil;
     private BrushManager brushManager;
+    private SchematicManager schematicManager;
     private PerformanceMonitor performanceMonitor;
     private BlockPlacer blockPlacer;
+    private PathToolManager pathToolManager;
     private PlayerListener playerListener;
 
     public static MCTools getInstance() {
@@ -54,6 +58,8 @@ public final class MCTools extends JavaPlugin {
         performanceMonitor = new PerformanceMonitor(this);
         blockPlacer = new BlockPlacer(this);
         brushManager = new BrushManager(this);
+        schematicManager = new SchematicManager(this);
+        pathToolManager = new PathToolManager(this);
 
         // Commands and listeners.
         registerCommands();
@@ -74,43 +80,31 @@ public final class MCTools extends JavaPlugin {
      */
     private void logStartup(long loadTimeMs) {
         String version = getDescription().getVersion();
-        getLogger().info("Enabled MCTools v" + version + " (" + loadTimeMs + "ms)");
-        getLogger().info("Team: PenguinStudios");
-        getLogger().info("Website: https://mcutils.net/");
-        getLogger().info("Download: https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release");
 
-        final String R = "\u001B[0m";
-        final String B = "\u001B[1m";
-        final String C = "\u001B[36m";
-        final String G = "\u001B[32m";
-        final String Y = "\u001B[33m";
-        final String W = "\u001B[37m";
-        final String GR = "\u001B[90m";
-        final String BL = "\u001B[34m";
-        final String M = "\u001B[35m";
-        
-        System.out.println();
-        System.out.println(C + B + "  ╔════════════════════════════════════════════╗" + R);
-        System.out.println(C + B + "  ║" + R + Y + B + "           M C T O O L S                   " + R + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + W + "       Advanced Shape Generation           " + R + C + B + "║" + R);
-        System.out.println(C + B + "  ╠════════════════════════════════════════════╣" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Version:  " + W + "v" + version + R + padSpaces(32 - version.length()) + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Author:   " + W + "PenguinStudios" + R + "                   " + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Web:      " + BL + "https://mcutils.net/shapegenerator" + R + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Discord:  " + M + "https://discord.penguinstudios.eu" + R + C + B + "║" + R);
-        System.out.println(C + B + "  ╠════════════════════════════════════════════╣" + R);
-        System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Configuration loaded" + R + "                   " + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Commands registered" + R + "                    " + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Terrain brush system" + R + "                   " + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Undo/Redo system (1000 ops)" + R + "            " + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + G + " ✓ " + W + "Preview with teleportation" + R + "             " + C + B + "║" + R);
-        System.out.println(C + B + "  ╠════════════════════════════════════════════╣" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Load time: " + G + loadTimeMs + "ms" + R + padSpaces(30 - String.valueOf(loadTimeMs).length()) + C + B + "║" + R);
-        System.out.println(C + B + "  ║" + R + GR + " Status:    " + G + B + "● READY" + R + "                          " + C + B + "║" + R);
-        System.out.println(C + B + "  ╚════════════════════════════════════════════╝" + R);
-        System.out.println();
+        java.util.logging.Logger log = getLogger();
+        log.info("");
+        log.info("╔════════════════════════════════════════════╗");
+        log.info("║           M C T O O L S                   ║");
+        log.info("║       Advanced Shape Generation           ║");
+        log.info("╠════════════════════════════════════════════╣");
+        log.info("║ Version:  v" + version + padSpaces(32 - version.length()) + "║");
+        log.info("║ Author:   PenguinStudios                  ║");
+        log.info("║ Web:      https://mcutils.net              ║");
+        log.info("║ Discord:  https://discord.penguinstudios.eu║");
+        log.info("╠════════════════════════════════════════════╣");
+        log.info("║ ✓ Configuration loaded                    ║");
+        log.info("║ ✓ Commands registered                     ║");
+        log.info("║ ✓ Terrain brush system                    ║");
+        log.info("║ ✓ Undo/Redo system (1000 ops)             ║");
+        log.info("║ ✓ Preview with teleportation              ║");
+        log.info("║ ✓ Schematic system                        ║");
+        log.info("╠════════════════════════════════════════════╣");
+        log.info("║ Load time: " + loadTimeMs + "ms" + padSpaces(31 - String.valueOf(loadTimeMs).length()) + "║");
+        log.info("║ Status:    ● READY                        ║");
+        log.info("╚════════════════════════════════════════════╝");
+        log.info("");
     }
-    
+
     private String padSpaces(int count) {
         if (count <= 0) return "";
         return " ".repeat(count);
@@ -159,6 +153,10 @@ public final class MCTools extends JavaPlugin {
             brushManager.reload();
         }
 
+        if (pathToolManager != null) {
+            pathToolManager.loadConfig();
+        }
+
         getLogger().info("Configuration reloaded");
     }
 
@@ -188,5 +186,13 @@ public final class MCTools extends JavaPlugin {
     
     public PlayerListener getPlayerListener() {
         return playerListener;
+    }
+    
+    public SchematicManager getSchematicManager() {
+        return schematicManager;
+    }
+    
+    public PathToolManager getPathToolManager() {
+        return pathToolManager;
     }
 }

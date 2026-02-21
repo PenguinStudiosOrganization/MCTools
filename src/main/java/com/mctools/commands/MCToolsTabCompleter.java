@@ -37,16 +37,29 @@ public class MCToolsTabCompleter implements TabCompleter {
     );
 
     private static final List<String> GRADIENT_COMMANDS = Arrays.asList(
-            // 2D Gradient Shapes
+            // 2D Gradient Shapes - Filled
             "gcir", "gsq", "grect", "gell", "gpoly", "gstar", "gline", "gspi",
-            // 3D Gradient Shapes
-            "gsph", "gdome", "gcyl", "gcone", "gpyr", "garch", "gtorus", "gwall", "ghelix",
-            "gellipsoid", "gtube", "gcapsule"
+            // 2D Gradient Shapes - Hollow
+            "ghcir", "ghsq", "ghrect", "ghell", "ghpoly",
+            // 3D Gradient Shapes - Filled
+            "gsph", "gdome", "gcyl", "gcone", "gpyr", "garch", "gtor", "gwall", "ghel",
+            "gellipsoid", "gtube", "gcapsule",
+            // 3D Gradient Shapes - Hollow
+            "ghsph", "ghdome", "ghcyl", "ghcone", "ghpyr", "gharch", "ghtor",
+            "ghcapsule", "ghellipsoid"
     );
 
     private static final List<String> ADMIN_COMMANDS = Arrays.asList(
             "help", "reload", "undo", "redo", "cancel", "stop", "pause", "resume", "info", "about", "version", "wand",
-            "performance", "perf"
+            "performance", "perf", "schematic", "schem", "paste", "build"
+    );
+
+    private static final List<String> PATH_COMMANDS = Arrays.asList(
+            "tool", "mode", "pos", "set", "preview", "generate", "particles", "sel"
+    );
+
+    private static final List<String> SCHEMATIC_ACTIONS = Arrays.asList(
+            "list", "load", "unload", "remove", "info", "rotate"
     );
     
     private static final List<String> CONTROL_COMMANDS = Arrays.asList(
@@ -88,12 +101,17 @@ public class MCToolsTabCompleter implements TabCompleter {
             completions.addAll(filterStartsWith(SHAPE_COMMANDS, input));
             completions.addAll(filterStartsWith(GRADIENT_COMMANDS, input));
             completions.addAll(filterStartsWith(ADMIN_COMMANDS, input));
+            completions.addAll(filterStartsWith(PATH_COMMANDS, input));
 
         } else if (args.length == 2) {
             String subCmd = args[0].toLowerCase();
             String input = args[1].toLowerCase();
 
-            if (subCmd.equals("tree")) {
+            if (subCmd.equals("schematic") || subCmd.equals("schem")) {
+                completions.addAll(filterStartsWith(SCHEMATIC_ACTIONS, input));
+            } else if (subCmd.equals("paste")) {
+                completions.addAll(filterStartsWith(Arrays.asList("-a", "-p"), input));
+            } else if (subCmd.equals("tree")) {
                 completions.addAll(filterStartsWith(Arrays.asList(
                     "oak", "spruce", "birch", "jungle", "acacia", "dark_oak",
                     "mangrove", "cherry", "crimson", "warped"
@@ -105,8 +123,26 @@ public class MCToolsTabCompleter implements TabCompleter {
                 }
             } else if (SHAPE_COMMANDS.contains(subCmd)) {
                 completions.addAll(getBlockSuggestions(player, input));
+            } else if (subCmd.equals("tool")) {
+                completions.addAll(filterStartsWith(Arrays.asList("enable", "disable"), input));
+            } else if (subCmd.equals("mode")) {
+                completions.addAll(filterStartsWith(Arrays.asList("road", "bridge", "curve"), input));
+            } else if (subCmd.equals("pos")) {
+                completions.addAll(filterStartsWith(Arrays.asList("list", "undo", "clear"), input));
+            } else if (subCmd.equals("preview") || subCmd.equals("particles")) {
+                completions.addAll(filterStartsWith(Arrays.asList("on", "off"), input));
+            } else if (subCmd.equals("set")) {
+                // Suggest setting keys based on current mode
+                try {
+                    var session = plugin.getPathToolManager().getSession(player);
+                    if (session.hasMode()) {
+                        var keys = com.mctools.path.PathSession.getValidKeys(session.getActiveMode());
+                        completions.addAll(filterStartsWith(new ArrayList<>(keys), input));
+                    }
+                } catch (Exception ignored) {}
             } else if (subCmd.equals("help")) {
                 completions.addAll(filterStartsWith(SHAPE_COMMANDS, input));
+                completions.addAll(filterStartsWith(Arrays.asList("path"), input));
             } else if (subCmd.equals("undo") || subCmd.equals("redo")) {
                 completions.addAll(filterStartsWith(Arrays.asList("1", "5", "10", "25", "50", "100"), input));
             }
@@ -116,7 +152,30 @@ public class MCToolsTabCompleter implements TabCompleter {
             String lastArg = args[args.length - 1].toLowerCase();
             String prevArg = args.length >= 2 ? args[args.length - 2].toLowerCase() : "";
 
-            if (subCmd.equals("tree")) {
+            if (subCmd.equals("set") && args.length == 3) {
+                // /mct set <key> <TAB> — suggest values based on the key
+                String key = args[1].toLowerCase();
+                completions.addAll(filterStartsWith(getPathSettingValueSuggestions(player, key), lastArg));
+            } else if (subCmd.equals("paste")) {
+                // Suggest only flags not already used
+                Set<String> usedFlags = new HashSet<>();
+                for (int i = 1; i < args.length - 1; i++) {
+                    usedFlags.add(args[i].toLowerCase());
+                }
+                List<String> available = new ArrayList<>();
+                if (!usedFlags.contains("-a")) available.add("-a");
+                if (!usedFlags.contains("-p")) available.add("-p");
+                completions.addAll(filterStartsWith(available, lastArg));
+            } else if ((subCmd.equals("schematic") || subCmd.equals("schem")) && args.length == 3) {
+                String action = args[1].toLowerCase();
+                if (action.equals("load") || action.equals("remove")) {
+                    try {
+                        completions.addAll(filterStartsWith(plugin.getSchematicManager().getSchematicNames(), lastArg));
+                    } catch (Exception ignored) {}
+                } else if (action.equals("rotate")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("90", "180", "270"), lastArg));
+                }
+            } else if (subCmd.equals("tree")) {
                 completions.addAll(filterStartsWith(Arrays.asList(
                     "seed:", "th:", "tr:", "bd:", "fd:", "fr:", "-roots", "-special"
                 ), lastArg));
@@ -200,9 +259,9 @@ public class MCToolsTabCompleter implements TabCompleter {
                 else if (argIndex == 3) suggestions.addAll(Arrays.asList("0", "2", "3", "5"));
             }
             case "hrect" -> {
-                if (argIndex <= 2) suggestions.addAll(radiusSuggestions);
-                else if (argIndex == 3) suggestions.addAll(Arrays.asList("0", "2", "3", "5"));
-                else if (argIndex == 4) suggestions.addAll(thicknessSuggestions);
+                if (argIndex <= 2) suggestions.addAll(radiusSuggestions);             // radiusX, radiusZ
+                else if (argIndex == 3) suggestions.addAll(thicknessSuggestions);      // thickness (or cornerRadius)
+                else if (argIndex == 4) suggestions.addAll(thicknessSuggestions);      // thickness (when cornerRadius at 3)
             }
             case "ell" -> {
                 if (argIndex <= 2) suggestions.addAll(radiusSuggestions);
@@ -295,13 +354,15 @@ public class MCToolsTabCompleter implements TabCompleter {
                 else if (argIndex == 3) suggestions.addAll(thicknessSuggestions);
             }
             case "wall" -> {
-                if (argIndex == 1) suggestions.addAll(Arrays.asList("10", "20", "30", "50"));
-                else if (argIndex == 2) suggestions.addAll(heightSuggestions);
+                if (argIndex == 1) suggestions.addAll(Arrays.asList("10", "20", "30", "50"));  // width
+                else if (argIndex == 2) suggestions.addAll(heightSuggestions);                   // height
+                else if (argIndex == 3) suggestions.addAll(thicknessSuggestions);                // thickness
             }
             case "helix", "hel" -> {
-                if (argIndex == 1) suggestions.addAll(radiusSuggestions);
-                else if (argIndex == 2) suggestions.addAll(heightSuggestions);
-                else if (argIndex == 3) suggestions.addAll(turnsSuggestions);
+                if (argIndex == 1) suggestions.addAll(heightSuggestions);       // height
+                else if (argIndex == 2) suggestions.addAll(radiusSuggestions);  // radius
+                else if (argIndex == 3) suggestions.addAll(turnsSuggestions);   // turns
+                else if (argIndex == 4) suggestions.addAll(thicknessSuggestions); // thickness
             }
 
             case "ellipsoid" -> {
@@ -313,9 +374,9 @@ public class MCToolsTabCompleter implements TabCompleter {
             }
 
             case "tube" -> {
-                if (argIndex == 1) suggestions.addAll(heightSuggestions);
-                else if (argIndex == 2) suggestions.addAll(radiusSuggestions);
-                else if (argIndex == 3) suggestions.addAll(Arrays.asList("3", "4", "5", "6", "8"));
+                if (argIndex == 1) suggestions.addAll(radiusSuggestions);                         // radius
+                else if (argIndex == 2) suggestions.addAll(heightSuggestions);                     // height
+                else if (argIndex == 3) suggestions.addAll(Arrays.asList("3", "4", "5", "6", "8")); // innerRadius
             }
 
             case "capsule" -> {
@@ -330,6 +391,54 @@ public class MCToolsTabCompleter implements TabCompleter {
         }
 
         return suggestions;
+    }
+
+    /**
+     * Returns value suggestions for a path tool setting key.
+     * Provides contextual completions based on the key type (int, boolean, material, enum).
+     */
+    private List<String> getPathSettingValueSuggestions(Player player, String key) {
+        return switch (key) {
+            // Integer: width
+            case "width" -> Arrays.asList("3", "5", "7", "9", "11", "15");
+            // Integer: clearance
+            case "clearance" -> Arrays.asList("2", "3", "4", "5");
+            // Integer: fill-below
+            case "fill-below" -> Arrays.asList("0", "2", "4", "6", "8");
+            // Integer: support-spacing
+            case "support-spacing" -> Arrays.asList("4", "6", "8", "10", "12");
+            // Integer: support-width
+            case "support-width" -> Arrays.asList("1", "2", "3", "4", "5");
+            // Integer: support-max-depth
+            case "support-max-depth" -> Arrays.asList("20", "40", "60", "80");
+            // Double: resolution
+            case "resolution" -> Arrays.asList("0.25", "0.5", "0.75", "1.0", "1.5");
+            // Boolean keys
+            case "use-slabs", "use-stairs", "terrain-adapt", "railings", "supports", "ramps" ->
+                    Arrays.asList("true", "false");
+            // Enum: algorithm
+            case "algorithm" -> Arrays.asList("catmullrom", "bezier");
+            // Enum: height-mode
+            case "height-mode" -> Arrays.asList("auto", "fixed");
+            // Material keys — suggest common blocks + "none" where applicable
+            case "material", "fill-material", "deck-material", "support-material" -> {
+                List<String> mats = new ArrayList<>(COMMON_BLOCKS.subList(0, Math.min(15, COMMON_BLOCKS.size())));
+                yield mats;
+            }
+            case "border", "centerline" -> {
+                List<String> mats = new ArrayList<>();
+                mats.add("none");
+                mats.addAll(COMMON_BLOCKS.subList(0, Math.min(12, COMMON_BLOCKS.size())));
+                yield mats;
+            }
+            case "railing-material" -> Arrays.asList(
+                    "stone_brick_wall", "cobblestone_wall", "oak_fence", "spruce_fence",
+                    "birch_fence", "dark_oak_fence", "nether_brick_fence", "iron_bars");
+            case "ramp-material" -> Arrays.asList(
+                    "stone_brick_stairs", "cobblestone_stairs", "oak_stairs", "spruce_stairs",
+                    "birch_stairs", "dark_oak_stairs", "sandstone_stairs", "quartz_stairs");
+            default -> Collections.emptyList();
+        };
     }
 
     private List<String> filterStartsWith(List<String> list, String prefix) {

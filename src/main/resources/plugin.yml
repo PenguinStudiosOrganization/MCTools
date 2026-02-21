@@ -1,5 +1,5 @@
 name: MCTools
-version: '1.2.0'
+version: '1.3.0'
 main: com.mctools.MCTools
 api-version: '1.20'
 description: Advanced shape generation and terrain brush tool for builders
@@ -29,6 +29,7 @@ permissions:
       mctools.gradient: true
       mctools.admin: true
       mctools.brush: true
+      mctools.path.*: true
   mctools.use:
     description: Basic usage permission
     default: true
@@ -53,6 +54,10 @@ permissions:
       mctools.shapes.star: true
       mctools.shapes.line: true
       mctools.shapes.wall: true
+      mctools.shapes.tube: true
+      mctools.shapes.capsule: true
+      mctools.shapes.ellipsoid: true
+      mctools.shapes.tree: true
   mctools.gradient:
     description: Use gradient shape commands
     default: true
@@ -70,4 +75,20 @@ permissions:
     default: op
   mctools.brush:
     description: Use MCBrush terrain tool
+    default: op
+  mctools.path.*:
+    description: All path tool permissions
+    default: op
+    children:
+      mctools.path.use: true
+      mctools.path.generate: true
+      mctools.path.bypass.limit: true
+  mctools.path.use:
+    description: Use path selection tool, modes, settings, preview
+    default: op
+  mctools.path.generate:
+    description: Generate path structures (road, bridge)
+    default: op
+  mctools.path.bypass.limit:
+    description: Bypass path point/length limits
     default: op

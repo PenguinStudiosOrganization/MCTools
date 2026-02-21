@@ -243,15 +243,17 @@ public class MCBrushCommand implements CommandExecutor, TabCompleter {
             }
             
             case "info" -> {
-                msg.sendHelpHeader(player);
-                player.sendMessage(msg.parse("<#10b981><bold>Current Brush Settings:</bold></#10b981>"));
-                player.sendMessage(msg.parse("  <gray>Enabled:</gray> " + (settings.isEnabled() ? "<#10b981>Yes" : "<#ef4444>No")));
-                player.sendMessage(msg.parse("  <gray>Heightmap:</gray> <white>" + (settings.getHeightmapName() != null ? settings.getHeightmapName() : "None")));
-                player.sendMessage(msg.parse("  <gray>Size:</gray> <white>" + settings.getSize()));
-                player.sendMessage(msg.parse("  <gray>Intensity:</gray> <white>" + settings.getIntensity() + "%"));
-                player.sendMessage(msg.parse("  <gray>Max Height:</gray> <white>" + settings.getMaxHeight()));
-                player.sendMessage(msg.parse("  <gray>Block:</gray> <white>" + settings.getBlock().name().toLowerCase()));
-                player.sendMessage(msg.parse("  <gray>Mode:</gray> <white>" + settings.getMode().name().toLowerCase()));
+                player.sendMessage(msg.parse(""));
+                player.sendMessage(msg.parse(msg.buildHeader("Brush Settings")));
+                player.sendMessage(msg.parse(""));
+                player.sendMessage(msg.parse(msg.buildDetail("Enabled", settings.isEnabled() ? "<" + MessageUtil.SUCCESS_COLOR + ">Yes</" + MessageUtil.SUCCESS_COLOR + ">" : "<" + MessageUtil.ERROR_COLOR + ">No</" + MessageUtil.ERROR_COLOR + ">")));
+                player.sendMessage(msg.parse(msg.buildDetail("Heightmap", "<white>" + (settings.getHeightmapName() != null ? settings.getHeightmapName() : "None") + "</white>")));
+                player.sendMessage(msg.parse(msg.buildDetail("Size", "<white>" + settings.getSize() + "</white>")));
+                player.sendMessage(msg.parse(msg.buildDetail("Intensity", "<white>" + settings.getIntensity() + "%</white>")));
+                player.sendMessage(msg.parse(msg.buildDetail("Max Height", "<white>" + settings.getMaxHeight() + "</white>")));
+                player.sendMessage(msg.parse(msg.buildDetail("Block", "<white>" + settings.getBlock().name().toLowerCase() + "</white>")));
+                player.sendMessage(msg.parse(msg.buildDetail("Mode", "<white>" + settings.getMode().name().toLowerCase() + "</white>")));
+                player.sendMessage(msg.parse(""));
             }
             
             case "help" -> {
@@ -269,20 +271,24 @@ public class MCBrushCommand implements CommandExecutor, TabCompleter {
 
     private void sendHelp(Player player) {
         MessageUtil msg = plugin.getMessageUtil();
-        msg.sendHelpHeader(player);
-        
-        player.sendMessage(msg.parse("<#f97316><bold>MCBrush Commands:</bold></#f97316>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb</#10b981> <dark_gray>-</dark_gray> <gray>Open brush GUI</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb toggle</#10b981> <dark_gray>-</dark_gray> <gray>Toggle brush on/off</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb size <#ef4444><size></#ef4444></#10b981> <dark_gray>-</dark_gray> <gray>Set brush size</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb intensity <#ef4444><1-100></#ef4444></#10b981> <dark_gray>-</dark_gray> <gray>Set intensity</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb height <#ef4444><height></#ef4444></#10b981> <dark_gray>-</dark_gray> <gray>Set max height</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb block <#f97316><block></#f97316></#10b981> <dark_gray>-</dark_gray> <gray>Set block type</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb heightmap <#a855f7><name></#a855f7></#10b981> <dark_gray>-</dark_gray> <gray>Set heightmap</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb mode <#3b82f6><mode></#3b82f6></#10b981> <dark_gray>-</dark_gray> <gray>Set mode (raise/lower/smooth/flatten)</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb list</#10b981> <dark_gray>-</dark_gray> <gray>List available heightmaps</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb info</#10b981> <dark_gray>-</dark_gray> <gray>Show current settings</gray>"));
-        player.sendMessage(msg.parse("<#10b981>/mcb reload</#10b981> <dark_gray>-</dark_gray> <gray>Reload heightmaps</gray>"));
+
+        player.sendMessage(msg.parse(""));
+        player.sendMessage(msg.parse(msg.buildHeader("MCBrush Help")));
+        player.sendMessage(msg.parse(""));
+
+        player.sendMessage(msg.parse("  " + msg.buildCategory("Commands")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb</" + MessageUtil.CMD_COLOR + ">", "Open brush GUI")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb toggle</" + MessageUtil.CMD_COLOR + ">", "Toggle brush on/off")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb size</" + MessageUtil.CMD_COLOR + "> <" + MessageUtil.RADIUS_COLOR + "><size></" + MessageUtil.RADIUS_COLOR + ">", "Set brush size")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb intensity</" + MessageUtil.CMD_COLOR + "> <" + MessageUtil.RADIUS_COLOR + "><1-100></" + MessageUtil.RADIUS_COLOR + ">", "Set intensity")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb height</" + MessageUtil.CMD_COLOR + "> <" + MessageUtil.HEIGHT_COLOR + "><height></" + MessageUtil.HEIGHT_COLOR + ">", "Set max height")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb block</" + MessageUtil.CMD_COLOR + "> <" + MessageUtil.BLOCK_COLOR + "><block></" + MessageUtil.BLOCK_COLOR + ">", "Set block type")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb heightmap</" + MessageUtil.CMD_COLOR + "> <" + MessageUtil.THICK_COLOR + "><name></" + MessageUtil.THICK_COLOR + ">", "Set heightmap")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb mode</" + MessageUtil.CMD_COLOR + "> <" + MessageUtil.HEIGHT_COLOR + "><mode></" + MessageUtil.HEIGHT_COLOR + ">", "Set mode (raise/lower/smooth/flatten)")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb list</" + MessageUtil.CMD_COLOR + ">", "List available heightmaps")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb info</" + MessageUtil.CMD_COLOR + ">", "Show current settings")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry("<" + MessageUtil.CMD_COLOR + ">/mcb reload</" + MessageUtil.CMD_COLOR + ">", "Reload heightmaps")));
+        player.sendMessage(msg.parse(""));
     }
 
     @Override

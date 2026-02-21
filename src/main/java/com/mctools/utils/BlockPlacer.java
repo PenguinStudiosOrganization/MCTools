@@ -55,6 +55,12 @@ public class BlockPlacer {
     }
 
     public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName) {
+        // Detect AI builds to skip floating cleanup (AI structures are intentionally designed)
+        boolean isAiBuild = shapeName != null && shapeName.startsWith("AI: ");
+        placeGradientBlocks(player, blockMap, shapeName, !isAiBuild);
+    }
+
+    public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName, boolean enableFloatingCleanup) {
         if (blockMap.isEmpty()) {
             plugin.getMessageUtil().sendError(player, "No blocks to place!");
             return;
@@ -62,9 +68,12 @@ public class BlockPlacer {
 
         List<Location> blocks = new ArrayList<>(blockMap.keySet());
 
+        plugin.getLogger().info("[AI Build] Starting placement for " + player.getName() + ": " + blocks.size() + " blocks, shape: " + shapeName);
+
         String safetyCheck = plugin.getPerformanceMonitor().checkOperationSafety(blocks.size());
         if (safetyCheck != null) {
             plugin.getMessageUtil().sendError(player, safetyCheck);
+            plugin.getLogger().info("[AI Build] Safety check failed: " + safetyCheck);
             playErrorEffects(player);
             return;
         }
@@ -78,11 +87,13 @@ public class BlockPlacer {
 
         ConfigManager config = plugin.getConfigManager();
         if (config.isPreviewEnabled()) {
-            PreviewTask previewTask = new PreviewTask(player, blocks, null, originalBlocks, shapeName, blockMap);
+            plugin.getLogger().info("[AI Build] Starting preview for " + player.getName());
+            PreviewTask previewTask = new PreviewTask(player, blocks, null, originalBlocks, shapeName, blockMap, enableFloatingCleanup);
             previewTasks.put(player.getUniqueId(), previewTask);
             previewTask.start();
         } else {
-            startPlacement(player, blocks, null, originalBlocks, shapeName, blockMap);
+            plugin.getLogger().info("[AI Build] Preview disabled, starting direct placement for " + player.getName());
+            startPlacement(player, blocks, null, originalBlocks, shapeName, blockMap, enableFloatingCleanup);
         }
     }
 
@@ -162,16 +173,22 @@ public class BlockPlacer {
 
     private void startPlacement(Player player, List<Location> blocks, BlockData blockData,
                                 Map<Location, BlockData> originalBlocks, String shapeName) {
-        startPlacement(player, blocks, blockData, originalBlocks, shapeName, null);
+        startPlacement(player, blocks, blockData, originalBlocks, shapeName, null, true);
     }
 
     private void startPlacement(Player player, List<Location> blocks, BlockData blockData,
                                 Map<Location, BlockData> originalBlocks, String shapeName,
                                 Map<Location, BlockData> gradientMap) {
+        startPlacement(player, blocks, blockData, originalBlocks, shapeName, gradientMap, true);
+    }
+
+    private void startPlacement(Player player, List<Location> blocks, BlockData blockData,
+                                Map<Location, BlockData> originalBlocks, String shapeName,
+                                Map<Location, BlockData> gradientMap, boolean enableFloatingCleanup) {
 
         plugin.getMessageUtil().sendInfo(player, "Generating " + formatNumber(blocks.size()) + " blocks...");
 
-        PlacementTask task = new PlacementTask(player, blocks, blockData, originalBlocks, shapeName, gradientMap);
+        PlacementTask task = new PlacementTask(player, blocks, blockData, originalBlocks, shapeName, gradientMap, enableFloatingCleanup);
         activeTasks.put(player.getUniqueId(), task);
         task.runTaskTimer(plugin, 0L, 1L);
     }
@@ -303,6 +320,7 @@ public class BlockPlacer {
         private final Map<Location, BlockData> originalBlocks;
         private final String shapeName;
         private final Map<Location, BlockData> gradientMap;
+        private final boolean enableFloatingCleanup;
         private BukkitTask countdownTask;
         private BukkitTask previewPlacementTask;
         private int secondsRemaining;
@@ -322,18 +340,19 @@ public class BlockPlacer {
 
         public PreviewTask(Player player, List<Location> blocks, BlockData finalBlockData,
                            Map<Location, BlockData> originalBlocks, String shapeName) {
-            this(player, blocks, finalBlockData, originalBlocks, shapeName, null);
+            this(player, blocks, finalBlockData, originalBlocks, shapeName, null, true);
         }
 
         public PreviewTask(Player player, List<Location> blocks, BlockData finalBlockData,
                            Map<Location, BlockData> originalBlocks, String shapeName,
-                           Map<Location, BlockData> gradientMap) {
+                           Map<Location, BlockData> gradientMap, boolean enableFloatingCleanup) {
             this.player = player;
             this.blocks = blocks;
             this.finalBlockData = finalBlockData;
             this.originalBlocks = originalBlocks;
             this.shapeName = shapeName;
             this.gradientMap = gradientMap;
+            this.enableFloatingCleanup = enableFloatingCleanup;
             this.secondsRemaining = plugin.getConfigManager().getPreviewDuration();
             this.initialSeconds = this.secondsRemaining;
             createBossbar();
@@ -478,14 +497,14 @@ public class BlockPlacer {
 
         private void startGenerationPhase() {
             generationStarted = true;
-            
-            // Keep preview blocks visible during generation - they will be gradually
-            // replaced by the actual blocks as placement progresses.
-            // The originalBlocks map already captured the state BEFORE preview,
-            // so WorldEdit undo will still work correctly.
-            
+
+            // Restore original blocks before starting placement so that
+            // WorldEdit's EditSession captures the real original state
+            // (not the preview glass) for proper //undo support.
+            restoreOriginal();
+
             player.playSound(player.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.2f);
-            startPlacement(player, blocks, finalBlockData, originalBlocks, shapeName, gradientMap);
+            startPlacement(player, blocks, finalBlockData, originalBlocks, shapeName, gradientMap, enableFloatingCleanup);
         }
 
         private void restoreOriginal() {
@@ -520,6 +539,7 @@ public class BlockPlacer {
         private final Map<Location, BlockData> originalBlocks;
         private final String shapeName;
         private final Map<Location, BlockData> gradientMap;
+        private final boolean enableFloatingCleanup;
 
         private int currentIndex = 0;
         private int lastProgressPercent = -1;
@@ -543,13 +563,14 @@ public class BlockPlacer {
 
         public PlacementTask(Player player, List<Location> blocks, BlockData blockData,
                              Map<Location, BlockData> originalBlocks, String shapeName,
-                             Map<Location, BlockData> gradientMap) {
+                             Map<Location, BlockData> gradientMap, boolean enableFloatingCleanup) {
             this.player = player;
             this.blocks = new ArrayList<>(blocks);
             this.blockData = blockData;
             this.originalBlocks = originalBlocks;
             this.shapeName = shapeName;
             this.gradientMap = gradientMap;
+            this.enableFloatingCleanup = enableFloatingCleanup;
             this.startTime = System.currentTimeMillis();
 
             for (Location loc : this.blocks) {
@@ -848,6 +869,7 @@ public class BlockPlacer {
         }
 
         private void scheduleFloatingCleanupIfEnabled() {
+            if (!enableFloatingCleanup) return;
             if (!plugin.getConfigManager().isFloatingCleanupEnabled()) return;
 
             int maxBlocks = plugin.getConfigManager().getFloatingCleanupMaxBlocks();

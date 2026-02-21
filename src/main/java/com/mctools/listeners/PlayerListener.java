@@ -5,6 +5,8 @@ import com.mctools.brush.BrushSettings;
 import com.mctools.brush.gui.BlockSelectorGUI;
 import com.mctools.brush.gui.BrushGUI;
 import com.mctools.brush.gui.HeightmapSelectorGUI;
+import com.mctools.path.PathToolManager;
+import com.mctools.path.gui.PathSettingsGUI;
 import com.mctools.utils.MessageUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
@@ -25,9 +27,15 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * Bukkit event listener for MCTools.
@@ -57,6 +65,7 @@ public class PlayerListener implements Listener {
     public void onPlayerQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
         plugin.getUndoManager().clearPlayer(player);
+        plugin.getPathToolManager().removeSession(player.getUniqueId());
     }
 
     /**
@@ -103,7 +112,8 @@ public class PlayerListener implements Listener {
 
         Inventory top = event.getView().getTopInventory();
         InventoryHolder holder = top.getHolder();
-        if (!(holder instanceof BrushGUI || holder instanceof HeightmapSelectorGUI || holder instanceof BlockSelectorGUI)) {
+        if (!(holder instanceof BrushGUI || holder instanceof HeightmapSelectorGUI
+                || holder instanceof BlockSelectorGUI || holder instanceof PathSettingsGUI)) {
             return;
         }
 
@@ -122,6 +132,8 @@ public class PlayerListener implements Listener {
             handleHeightmapSelectorClick(player, (HeightmapSelectorGUI) holder, event.getSlot());
         } else if (holder instanceof BlockSelectorGUI) {
             handleBlockSelectorClick(player, (BlockSelectorGUI) holder, event.getSlot());
+        } else if (holder instanceof PathSettingsGUI pathGui) {
+            pathGui.handleClick(event.getSlot(), event.isLeftClick(), event.isRightClick(), event.isShiftClick());
         }
     }
 
@@ -129,7 +141,8 @@ public class PlayerListener implements Listener {
     public void onGuiDrag(InventoryDragEvent event) {
         Inventory top = event.getView().getTopInventory();
         InventoryHolder holder = top.getHolder();
-        if (holder instanceof BrushGUI || holder instanceof HeightmapSelectorGUI || holder instanceof BlockSelectorGUI) {
+        if (holder instanceof BrushGUI || holder instanceof HeightmapSelectorGUI
+                || holder instanceof BlockSelectorGUI || holder instanceof PathSettingsGUI) {
             event.setCancelled(true);
         }
     }
@@ -295,6 +308,82 @@ public class PlayerListener implements Listener {
         return Math.max(min, Math.min(max, v));
     }
     
+    /** Cooldown map to prevent double-fire from PlayerInteractEvent (main-hand + off-hand). */
+    private final Map<UUID, Long> shovelClickCooldown = new HashMap<>();
+    private static final long SHOVEL_CLICK_COOLDOWN_MS = 150;
+
+    /**
+     * Path Tool: Shovel click handler.
+     * Left-click with shovel = set Pos1 (reset path).
+     * Shift+Left-click with shovel = reset selection (clear all positions).
+     * Right-click with shovel = append next position.
+     * Only active when the player has the tool enabled OR is holding a persistent MCTools path shovel.
+     *
+     * <p>Filters: main-hand only + 150ms debounce to prevent Bukkit's
+     * double-fire (once per hand) from registering multiple points.</p>
+     */
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onShovelUse(PlayerInteractEvent event) {
+        // Only process main-hand events to prevent double-fire
+        if (event.getHand() != EquipmentSlot.HAND) return;
+
+        Player player = event.getPlayer();
+        ItemStack item = player.getInventory().getItemInMainHand();
+
+        PathToolManager pathManager = plugin.getPathToolManager();
+        if (!pathManager.isAllowedShovel(item.getType())) return;
+
+        // Check permission
+        if (!player.hasPermission("mctools.path.use")) return;
+
+        // Check if the player has the tool enabled OR is holding a persistent MCTools path shovel
+        com.mctools.path.PathSession session = pathManager.getSession(player);
+        boolean isPersistentShovel = isPathToolShovel(item);
+
+        // Auto-enable tool if holding persistent shovel
+        if (isPersistentShovel && !session.isToolEnabled()) {
+            session.setToolEnabled(true);
+        }
+
+        if (!session.isToolEnabled()) return;
+
+        Action action = event.getAction();
+
+        // Only handle block clicks (not air)
+        if (action != Action.LEFT_CLICK_BLOCK && action != Action.RIGHT_CLICK_BLOCK) return;
+        if (event.getClickedBlock() == null) return;
+
+        // Debounce: prevent rapid double-fire within 150ms
+        long now = System.currentTimeMillis();
+        Long lastClick = shovelClickCooldown.get(player.getUniqueId());
+        if (lastClick != null && (now - lastClick) < SHOVEL_CLICK_COOLDOWN_MS) {
+            event.setCancelled(true);
+            return;
+        }
+        shovelClickCooldown.put(player.getUniqueId(), now);
+
+        event.setCancelled(true);
+
+        if (action == Action.LEFT_CLICK_BLOCK) {
+            pathManager.handleLeftClick(player, event.getClickedBlock().getLocation(), player.isSneaking());
+        } else {
+            pathManager.handleRightClick(player, event.getClickedBlock().getLocation());
+        }
+    }
+
+    /**
+     * Checks if an ItemStack is a persistent MCTools Path Tool shovel.
+     * Recognizes the shovel by its display name containing "Path Tool".
+     */
+    private boolean isPathToolShovel(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) return false;
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null || !meta.hasDisplayName()) return false;
+        String displayName = meta.getDisplayName();
+        return displayName != null && displayName.contains("Path Tool");
+    }
+
+
     /**
      * Intercepts //wand command from WorldEdit and offers a choice between
      * WorldEdit wand and MCTools Terrain Brush wand.
@@ -327,7 +416,7 @@ public class PlayerListener implements Listener {
     }
     
     /**
-     * Sends a simple wand selection menu to the player.
+     * Sends a wand selection menu to the player with all available tool options.
      */
     private void sendWandChoiceMenu(Player player) {
         player.sendMessage("");
@@ -340,11 +429,19 @@ public class PlayerListener implements Listener {
             .hoverEvent(HoverEvent.showText(Component.text("Click to get WorldEdit Wand", NamedTextColor.YELLOW)));
         player.sendMessage(weOption);
         
-        // MCTools option
+        // MCTools Brush option
         Component mctOption = Component.text("§a§l[MCTools] §7- §fMCTools' Brush")
             .clickEvent(ClickEvent.runCommand("/mct wand"))
             .hoverEvent(HoverEvent.showText(Component.text("Click to get MCTools Terrain Brush", NamedTextColor.GREEN)));
         player.sendMessage(mctOption);
+        
+        // Path Tool Shovel option
+        if (player.hasPermission("mctools.path.use")) {
+            Component pathOption = Component.text("§b§l[Path Tool] §7- §fPath Selection Shovel")
+                .clickEvent(ClickEvent.runCommand("/mct pathshovel"))
+                .hoverEvent(HoverEvent.showText(Component.text("Click to get Path Tool Shovel (Road/Bridge/Curve)", NamedTextColor.AQUA)));
+            player.sendMessage(pathOption);
+        }
         
         player.sendMessage("");
     }

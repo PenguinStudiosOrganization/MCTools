@@ -78,3 +78,30 @@ brush:
   
   # Folder for heightmap images (inside plugin folder)
   heightmaps-folder: heightmaps
+
+# ============================================
+# AI BUILD SETTINGS
+# ============================================
+
+ai-build:
+  # Enable AI structure building
+  enabled: true
+  # API base URL for fetching AI structures (no trailing slash)
+  api-url: "https://mcutils.net/api/tools/shape-ai/structures"
+  # Request timeout in seconds
+  timeout: 10
+
+# ============================================
+# PATH TOOL SETTINGS (Curve / Road / Bridge)
+# ============================================
+
+path-tool:
+  # Shovel types recognized as the selection tool
+  shovel-materials:
+    - WOODEN_SHOVEL
+
+  # Maximum number of control points per selection
+  max-points: 50
+
+  # Maximum total path length in blocks
+  max-path-length: 2000

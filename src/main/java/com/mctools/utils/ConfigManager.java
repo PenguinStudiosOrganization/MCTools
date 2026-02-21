@@ -64,6 +64,11 @@ public class ConfigManager {
     private Set<Material> floatingCleanupWhitelist;
     private Set<Material> floatingCleanupBlacklist;
 
+    // AI Build settings
+    private boolean aiBuildEnabled;
+    private String aiBuildApiUrl;
+    private int aiBuildTimeout;
+
     // Brush settings
     private boolean brushEnabled;
     private String brushPermission;
@@ -129,6 +134,11 @@ public class ConfigManager {
         floatingCleanupWhitelist = parseMaterialList(config.getStringList("floating-cleanup.whitelist"));
         floatingCleanupBlacklist = parseMaterialList(config.getStringList("floating-cleanup.blacklist"));
 
+        // AI Build
+        aiBuildEnabled = config.getBoolean("ai-build.enabled", true);
+        aiBuildApiUrl = config.getString("ai-build.api-url", "https://mcutils.net/api/tools/shape-ai/structures");
+        aiBuildTimeout = config.getInt("ai-build.timeout", 10);
+
         // Brush settings
         brushEnabled = config.getBoolean("brush.enabled", true);
         brushPermission = config.getString("brush.permission", "mctools.brush");
@@ -180,6 +190,11 @@ public class ConfigManager {
     public int getFloatingCleanupPadding() { return floatingCleanupPadding; }
     public Set<Material> getFloatingCleanupWhitelist() { return floatingCleanupWhitelist; }
     public Set<Material> getFloatingCleanupBlacklist() { return floatingCleanupBlacklist; }
+
+    // AI Build getters
+    public boolean isAiBuildEnabled() { return aiBuildEnabled; }
+    public String getAiBuildApiUrl() { return aiBuildApiUrl; }
+    public int getAiBuildTimeout() { return aiBuildTimeout; }
 
     // Brush getters
     public boolean isBrushEnabled() { return brushEnabled; }
