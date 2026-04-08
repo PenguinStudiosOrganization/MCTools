@@ -32,6 +32,8 @@ public class MCToolsTabCompleter implements TabCompleter {
             "ellipsoid", "tube", "capsule", "tree",
             // 3D Shapes - Hollow
             "hsph", "hdome", "hcyl", "hcone", "hpyr", "harch", "htorus", "htor", "hcapsule", "hellipsoid",
+            // Special
+            "scyl",
             // Utility
             "center"
     );
@@ -51,7 +53,7 @@ public class MCToolsTabCompleter implements TabCompleter {
 
     private static final List<String> ADMIN_COMMANDS = Arrays.asList(
             "help", "reload", "undo", "redo", "cancel", "stop", "pause", "resume", "info", "about", "version", "wand",
-            "performance", "perf", "schematic", "schem", "paste", "build"
+            "performance", "perf", "schematic", "schem", "paste", "debug"
     );
 
     private static final List<String> PATH_COMMANDS = Arrays.asList(
@@ -64,6 +66,22 @@ public class MCToolsTabCompleter implements TabCompleter {
     
     private static final List<String> CONTROL_COMMANDS = Arrays.asList(
             "cancel", "stop", "pause", "resume"
+    );
+
+    private static final List<String> SHAPE_NAMES = Arrays.asList(
+            "circle", "square", "rectangle", "ellipse", "polygon", "star", "line", "spiral",
+            "sphere", "dome", "cylinder", "cone", "pyramid", "arch", "torus", "wall", "helix",
+            "tube", "capsule", "ellipsoid", "sectioncylinder", "tree"
+    );
+
+    private static final List<String> GRADIENT_SHAPE_NAMES = Arrays.asList(
+            "circle", "square", "rectangle", "ellipse", "polygon", "star", "line", "spiral",
+            "sphere", "dome", "cylinder", "cone", "pyramid", "arch", "torus", "wall", "helix",
+            "tube", "capsule", "ellipsoid"
+    );
+
+    private static final List<String> PATH_SUB_COMMANDS = Arrays.asList(
+            "help", "tool", "mode", "pos", "set", "preview", "generate", "particles", "clear"
     );
 
     private static final List<String> COMMON_BLOCKS = Arrays.asList(
@@ -98,6 +116,7 @@ public class MCToolsTabCompleter implements TabCompleter {
             // First argument: shape/admin/gradient
             String input = args[0].toLowerCase();
 
+            completions.addAll(filterStartsWith(Arrays.asList("shape", "gradient", "path", "tree"), input));
             completions.addAll(filterStartsWith(SHAPE_COMMANDS, input));
             completions.addAll(filterStartsWith(GRADIENT_COMMANDS, input));
             completions.addAll(filterStartsWith(ADMIN_COMMANDS, input));
@@ -107,7 +126,13 @@ public class MCToolsTabCompleter implements TabCompleter {
             String subCmd = args[0].toLowerCase();
             String input = args[1].toLowerCase();
 
-            if (subCmd.equals("schematic") || subCmd.equals("schem")) {
+            if (subCmd.equals("shape")) {
+                completions.addAll(filterStartsWith(SHAPE_NAMES, input));
+            } else if (subCmd.equals("gradient")) {
+                completions.addAll(filterStartsWith(GRADIENT_SHAPE_NAMES, input));
+            } else if (subCmd.equals("path")) {
+                completions.addAll(filterStartsWith(PATH_SUB_COMMANDS, input));
+            } else if (subCmd.equals("schematic") || subCmd.equals("schem")) {
                 completions.addAll(filterStartsWith(SCHEMATIC_ACTIONS, input));
             } else if (subCmd.equals("paste")) {
                 completions.addAll(filterStartsWith(Arrays.asList("-a", "-p"), input));
@@ -132,7 +157,6 @@ public class MCToolsTabCompleter implements TabCompleter {
             } else if (subCmd.equals("preview") || subCmd.equals("particles")) {
                 completions.addAll(filterStartsWith(Arrays.asList("on", "off"), input));
             } else if (subCmd.equals("set")) {
-                // Suggest setting keys based on current mode
                 try {
                     var session = plugin.getPathToolManager().getSession(player);
                     if (session.hasMode()) {
@@ -145,6 +169,8 @@ public class MCToolsTabCompleter implements TabCompleter {
                 completions.addAll(filterStartsWith(Arrays.asList("path"), input));
             } else if (subCmd.equals("undo") || subCmd.equals("redo")) {
                 completions.addAll(filterStartsWith(Arrays.asList("1", "5", "10", "25", "50", "100"), input));
+            } else if (subCmd.equals("debug")) {
+                completions.addAll(filterStartsWith(Arrays.asList("update"), input));
             }
 
         } else if (args.length >= 3) {
@@ -152,7 +178,71 @@ public class MCToolsTabCompleter implements TabCompleter {
             String lastArg = args[args.length - 1].toLowerCase();
             String prevArg = args.length >= 2 ? args[args.length - 2].toLowerCase() : "";
 
-            if (subCmd.equals("set") && args.length == 3) {
+            if (subCmd.equals("shape") && args.length == 3) {
+                // /mct shape <name> <TAB> — suggest block
+                completions.addAll(getBlockSuggestions(player, lastArg));
+            } else if (subCmd.equals("shape") && args.length >= 4) {
+                // /mct shape <name> <block> [params...] — suggest params or -h flag
+                String shapeName = args[1].toLowerCase();
+                String mappedAbbrev = getMappedAbbrev(shapeName);
+                if (mappedAbbrev != null) {
+                    completions.addAll(getParameterSuggestions(mappedAbbrev, args.length - 3));
+                }
+                if (!Arrays.asList(args).contains("-h")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("-h"), lastArg));
+                } else if (prevArg.equalsIgnoreCase("-h")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("1", "2", "3", "4", "5"), lastArg));
+                }
+            } else if (subCmd.equals("gradient") && args.length == 3) {
+                // /mct gradient <name> <TAB> — suggest colors
+                if (lastArg.isEmpty() || lastArg.startsWith("#")) {
+                    completions.addAll(Arrays.asList("#ff0000,#0000ff", "#ff6b6b,#4ecdc4", "#ffffff,#000000",
+                        "#ff0000,#00ff00,#0000ff", "#ff6b6b,#ffd93d,#6bcb77,#4d96ff"));
+                }
+            } else if (subCmd.equals("gradient") && args.length >= 4) {
+                // /mct gradient <name> <colors> [params...] — suggest params and flags
+                String shapeName = args[1].toLowerCase();
+                String mappedAbbrev = getMappedAbbrev(shapeName);
+                if (mappedAbbrev != null) {
+                    completions.addAll(getParameterSuggestions(mappedAbbrev, args.length - 4));
+                }
+                if (prevArg.equalsIgnoreCase("-dir")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("y", "x", "z", "radial"), lastArg));
+                } else if (prevArg.equalsIgnoreCase("-interp")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("oklab", "lab", "rgb", "hsl"), lastArg));
+                } else if (prevArg.equalsIgnoreCase("-h")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("1", "2", "3", "4", "5"), lastArg));
+                } else if (lastArg.startsWith("-")) {
+                    List<String> gflags = new ArrayList<>(Arrays.asList("-dir", "-interp", "-unique"));
+                    if (!Arrays.asList(args).contains("-h")) gflags.add("-h");
+                    completions.addAll(filterStartsWith(gflags, lastArg));
+                }
+            } else if (subCmd.equals("path") && args.length == 3) {
+                String pathSub = args[1].toLowerCase();
+                if (pathSub.equals("tool")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("enable", "disable"), lastArg));
+                } else if (pathSub.equals("mode")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("road", "bridge", "curve"), lastArg));
+                } else if (pathSub.equals("pos")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("list", "undo", "clear"), lastArg));
+                } else if (pathSub.equals("preview") || pathSub.equals("particles")) {
+                    completions.addAll(filterStartsWith(Arrays.asList("on", "off"), lastArg));
+                } else if (pathSub.equals("set")) {
+                    try {
+                        var session = plugin.getPathToolManager().getSession(player);
+                        if (session.hasMode()) {
+                            var keys = com.mctools.path.PathSession.getValidKeys(session.getActiveMode());
+                            completions.addAll(filterStartsWith(new ArrayList<>(keys), lastArg));
+                        }
+                    } catch (Exception ignored) {}
+                }
+            } else if (subCmd.equals("path") && args.length >= 4 && args[1].equalsIgnoreCase("set")) {
+                String key = args[2].toLowerCase();
+                completions.addAll(filterStartsWith(getPathSettingValueSuggestions(player, key), lastArg));
+            } else if (subCmd.equals("debug") && args.length == 3 && args[1].equalsIgnoreCase("update")) {
+                // /mct debug update <version> — suggest example version numbers
+                completions.addAll(filterStartsWith(Arrays.asList("1.0.0", "1.1.0", "2.0.0", "99.9.9"), lastArg));
+            } else if (subCmd.equals("set") && args.length == 3) {
                 // /mct set <key> <TAB> — suggest values based on the key
                 String key = args[1].toLowerCase();
                 completions.addAll(filterStartsWith(getPathSettingValueSuggestions(player, key), lastArg));
@@ -192,6 +282,9 @@ public class MCToolsTabCompleter implements TabCompleter {
                     completions.addAll(getParameterSuggestions(baseCmd, shapeArgIndex));
                     completions.addAll(Arrays.asList("-dir", "-interp", "-unique"));
                 }
+            } else if (subCmd.equals("scyl") && args.length == 5) {
+                // /mct scyl <block> <radius> <sections> <TAB> — suggest section block
+                completions.addAll(getBlockSuggestions(player, lastArg));
             } else {
                 completions.addAll(getParameterSuggestions(subCmd, args.length - 2));
             }
@@ -388,6 +481,11 @@ public class MCToolsTabCompleter implements TabCompleter {
                 else if (argIndex == 2) suggestions.addAll(heightSuggestions);
                 else if (argIndex == 3) suggestions.addAll(thicknessSuggestions);
             }
+            case "scyl" -> {
+                if (argIndex == 1) suggestions.addAll(radiusSuggestions);                          // radius
+                else if (argIndex == 2) suggestions.addAll(Arrays.asList("2", "3", "4", "5", "6", "8", "10", "12")); // sections
+                // argIndex == 3 is sectionBlock — handled separately in onTabComplete
+            }
         }
 
         return suggestions;
@@ -445,5 +543,33 @@ public class MCToolsTabCompleter implements TabCompleter {
         return list.stream()
                 .filter(s -> s.toLowerCase().startsWith(prefix.toLowerCase()))
                 .collect(Collectors.toList());
+    }
+
+    private static String getMappedAbbrev(String shapeName) {
+        return switch (shapeName) {
+            case "circle"          -> "cir";
+            case "square"          -> "sq";
+            case "rectangle"       -> "rect";
+            case "ellipse"         -> "ell";
+            case "polygon"         -> "poly";
+            case "sphere"          -> "sph";
+            case "dome"            -> "dome";
+            case "cylinder"        -> "cyl";
+            case "cone"            -> "cone";
+            case "pyramid"         -> "pyr";
+            case "arch"            -> "arch";
+            case "torus"           -> "tor";
+            case "wall"            -> "wall";
+            case "helix"           -> "hel";
+            case "tube"            -> "tube";
+            case "capsule"         -> "capsule";
+            case "ellipsoid"       -> "ellipsoid";
+            case "sectioncylinder" -> "scyl";
+            case "star"            -> "star";
+            case "line"            -> "line";
+            case "spiral"          -> "spi";
+            case "tree"            -> "tree";
+            default                -> shapeName; // pass-through for short aliases
+        };
     }
 }

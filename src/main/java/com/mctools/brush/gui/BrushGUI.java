@@ -1,6 +1,7 @@
 package com.mctools.brush.gui;
 
 import com.mctools.MCTools;
+import com.mctools.brush.BrushManager;
 import com.mctools.brush.BrushSettings;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -360,8 +361,7 @@ public class BrushGUI implements InventoryHolder {
                 ix = Math.min(ix, w - 1);
                 iy = Math.min(iy, h - 1);
                 
-                int rgb = img.getRGB(ix, iy);
-                int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
+                int gray = (int) (BrushManager.getPixelBrightness(img, ix, iy) * 255);
                 
                 String c = gray < 64 ? "§0" : gray < 128 ? "§8" : gray < 192 ? "§7" : "§f";
                 line.append(c).append("█");

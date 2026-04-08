@@ -26,16 +26,6 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.NotNull;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.util.*;
 import java.util.regex.Pattern;
 
@@ -48,6 +38,45 @@ public class MCToolsCommand implements CommandExecutor {
 
     private static final Pattern HEX_COLORS_PATTERN =
         Pattern.compile("^#?[0-9a-fA-F]{6}(,#?[0-9a-fA-F]{6}){1,5}$");
+
+    /** Maps readable shape names and short aliases → internal abbreviation used by createShape(). */
+    private static final Map<String, String> SHAPE_ALIAS_MAP;
+    /** Shape names (full or alias) that support the {@code -h} hollow flag. */
+    private static final Set<String> HOLLOW_CAPABLE;
+    static {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("circle",          "cir");       m.put("cir",         "cir");
+        m.put("square",          "sq");        m.put("sq",          "sq");
+        m.put("rectangle",       "rect");      m.put("rect",        "rect");
+        m.put("ellipse",         "ell");       m.put("ell",         "ell");
+        m.put("polygon",         "poly");      m.put("poly",        "poly");
+        m.put("star",            "star");
+        m.put("line",            "line");
+        m.put("spiral",          "spi");       m.put("spi",         "spi");
+        m.put("sphere",          "sph");       m.put("sph",         "sph");
+        m.put("dome",            "dome");
+        m.put("cylinder",        "cyl");       m.put("cyl",         "cyl");
+        m.put("cone",            "cone");
+        m.put("pyramid",         "pyr");       m.put("pyr",         "pyr");
+        m.put("arch",            "arch");
+        m.put("torus",           "tor");       m.put("tor",         "tor");
+        m.put("wall",            "wall");
+        m.put("helix",           "hel");       m.put("hel",         "hel");
+        m.put("tube",            "tube");
+        m.put("capsule",         "capsule");
+        m.put("ellipsoid",       "ellipsoid");
+        m.put("sectioncylinder", "scyl");      m.put("scyl",        "scyl");
+        m.put("tree",            "tree");
+        SHAPE_ALIAS_MAP = Collections.unmodifiableMap(m);
+
+        HOLLOW_CAPABLE = Set.of(
+            "circle", "cir", "square", "sq", "rectangle", "rect",
+            "ellipse", "ell", "polygon", "poly",
+            "sphere", "sph", "dome", "cylinder", "cyl",
+            "cone", "pyramid", "pyr", "arch",
+            "torus", "tor", "capsule", "ellipsoid"
+        );
+    }
 
     private final MCTools plugin;
     private final Map<UUID, Long> cooldowns;
@@ -112,6 +141,20 @@ public class MCToolsCommand implements CommandExecutor {
                 }
                 plugin.reloadPluginConfig();
                 msg.sendInfo(player, "Configuration reloaded successfully!");
+                return true;
+            }
+            case "debug" -> {
+                if (!player.hasPermission("mctools.admin")) {
+                    msg.sendError(player, "You don't have permission to use debug commands!");
+                    return true;
+                }
+                if (args.length < 3 || !args[1].equalsIgnoreCase("update")) {
+                    msg.sendError(player, "Usage: /mct debug update <version>");
+                    return true;
+                }
+                String fakeVersion = args[2];
+                plugin.getUpdateChecker().sendDebugUpdate(player, fakeVersion);
+                msg.sendInfo(player, "Sent debug update notification for version <white>" + fakeVersion + "</white>.");
                 return true;
             }
             case "undo" -> {
@@ -442,8 +485,52 @@ public class MCToolsCommand implements CommandExecutor {
                 plugin.getSchematicManager().paste(player, ignoreAir, skipPreview);
                 return true;
             }
-            case "build" -> {
-                handleBuildCommand(player, args);
+            case "shape" -> {
+                if (args.length < 3) {
+                    msg.sendUsage(player, "/mct shape <name> <block> [params...] [-h [thickness]]");
+                    return true;
+                }
+                if (!checkCooldown(player)) return true;
+                if (getBlockPlacer().hasActiveTask(player)) {
+                    msg.sendWarning(player, "You already have an active operation! Use /mct cancel to stop it.");
+                    return true;
+                }
+                try {
+                    handleNewShapeCommand(player, args);
+                } catch (IllegalArgumentException e) {
+                    msg.sendError(player, e.getMessage());
+                    getBlockPlacer().playErrorEffects(player);
+                }
+                return true;
+            }
+            case "gradient" -> {
+                if (args.length < 3) {
+                    msg.sendUsage(player, "/mct gradient <shape> <#hex1,#hex2,...> [params...] [-h [thickness]]");
+                    return true;
+                }
+                if (!checkCooldown(player)) return true;
+                if (getBlockPlacer().hasActiveTask(player)) {
+                    msg.sendWarning(player, "You already have an active operation! Use /mct cancel to stop it.");
+                    return true;
+                }
+                try {
+                    handleNewGradientCommand(player, args);
+                } catch (IllegalArgumentException e) {
+                    msg.sendError(player, e.getMessage());
+                    getBlockPlacer().playErrorEffects(player);
+                }
+                return true;
+            }
+            case "path" -> {
+                if (!player.hasPermission("mctools.path.use")) {
+                    msg.sendError(player, "You don't have permission to use path tools!");
+                    return true;
+                }
+                if (args.length < 2) {
+                    plugin.getPathToolManager().sendHelp(player);
+                    return true;
+                }
+                handlePathSubCommand(player, args);
                 return true;
             }
         }
@@ -665,312 +752,167 @@ public class MCToolsCommand implements CommandExecutor {
         }
     }
 
-    private void handleBuildCommand(Player player, String[] args) {
+    // ── New structured command handlers ──────────────────────────────────
+
+    private void handleNewShapeCommand(Player player, String[] args) {
+        // args: ["shape", <name>, <block>, [params...], [-h [thick]]]
         MessageUtil msg = plugin.getMessageUtil();
 
-        if (!plugin.getConfigManager().isAiBuildEnabled()) {
-            msg.sendError(player, "AI Build is currently disabled.");
+        String shapeName = args[1].toLowerCase();
+        String abbrev = SHAPE_ALIAS_MAP.get(shapeName);
+        if (abbrev == null) {
+            msg.sendUnknownArgument(player, args[1]);
             return;
         }
 
-        if (args.length < 2) {
-            msg.sendUsage(player, "/mct build <id>");
+        if (abbrev.equals("tree")) {
+            String[] treeArgs = new String[args.length - 1];
+            treeArgs[0] = "tree";
+            System.arraycopy(args, 2, treeArgs, 1, args.length - 2);
+            handleTreeCommand(player, treeArgs);
+            return;
+        }
+        if (abbrev.equals("scyl")) {
+            String[] scylArgs = new String[args.length - 1];
+            scylArgs[0] = "scyl";
+            System.arraycopy(args, 2, scylArgs, 1, args.length - 2);
+            handleSectionCylinderCommand(player, scylArgs);
             return;
         }
 
-        String structureId = args[1];
+        boolean hollow = false;
+        String hollowThickness = "1";
+        List<String> positional = new ArrayList<>();
+        positional.add(""); // placeholder for final abbrev
 
-        // Validate structure ID format: alphanumeric, underscores, hyphens, 1-20 chars
-        if (!structureId.matches("^[a-zA-Z0-9_-]{1,20}$")) {
-            msg.sendError(player, "Invalid structure ID! Use only letters, numbers, underscores, and hyphens (max 20 chars).");
-            return;
-        }
-
-        if (!checkCooldown(player)) {
-            return;
-        }
-
-        if (getBlockPlacer().hasActiveTask(player)) {
-            msg.sendWarning(player, "You already have an active operation! Use /mct cancel to stop it.");
-            return;
-        }
-
-        // Capture origin BEFORE the async call so the player's position at command time is used
-        final Location origin = player.getLocation().getBlock().getLocation();
-        final World world = origin.getWorld();
-
-        if (world == null) {
-            msg.sendError(player, "Could not determine your world!");
-            return;
-        }
-
-        msg.sendInfo(player, "Fetching AI structure <white>" + structureId + "</white>...");
-
-        org.bukkit.Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            try {
-                String apiUrl = plugin.getConfigManager().getAiBuildApiUrl() + "/" + structureId;
-                int timeout = plugin.getConfigManager().getAiBuildTimeout();
-
-                HttpClient client = HttpClient.newBuilder()
-                        .connectTimeout(Duration.ofSeconds(timeout))
-                        .followRedirects(HttpClient.Redirect.NORMAL)
-                        .build();
-
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(apiUrl))
-                        .timeout(Duration.ofSeconds(timeout))
-                        .header("Accept", "application/json")
-                        .GET()
-                        .build();
-
-                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-                String body = response.body();
-
-                if (response.statusCode() != 200) {
-                    String errorMsg = "Failed to fetch structure (HTTP " + response.statusCode() + ")";
-                    try {
-                        JsonObject errorJson = JsonParser.parseString(body).getAsJsonObject();
-                        if (errorJson.has("error")) {
-                            errorMsg = errorJson.get("error").getAsString();
-                        }
-                    } catch (Exception ignored) {
-                        // Response may be HTML (VPN detection) — use default message
-                    }
-                    String finalError = errorMsg;
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
-                            msg.sendError(player, finalError));
-                    return;
+        for (int i = 2; i < args.length; i++) {
+            if (args[i].equalsIgnoreCase("-h")) {
+                hollow = true;
+                if (i + 1 < args.length && isPositiveInt(args[i + 1])) {
+                    hollowThickness = args[++i];
                 }
-
-                JsonObject json;
-                try {
-                    json = JsonParser.parseString(body).getAsJsonObject();
-                } catch (Exception e) {
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
-                            msg.sendError(player, "Invalid response from API (not valid JSON)."));
-                    return;
-                }
-
-                if (!json.has("success") || !json.get("success").getAsBoolean()) {
-                    String error = json.has("error") ? json.get("error").getAsString() : "Unknown error";
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
-                            msg.sendError(player, error));
-                    return;
-                }
-
-                if (!json.has("data") || !json.get("data").isJsonObject()) {
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
-                            msg.sendError(player, "Invalid API response: missing 'data' object."));
-                    return;
-                }
-
-                JsonObject data = json.getAsJsonObject("data");
-                String name = data.has("name") ? data.get("name").getAsString() : structureId;
-                int blockCount = data.has("blockCount") ? data.get("blockCount").getAsInt() : 0;
-
-                // Parse blocks on the async thread to avoid main thread lag
-                // Support both flat "blocks" array and layered "layers" array format
-                List<int[]> parsedCoords = new ArrayList<>();
-                List<String> parsedBlockNames = new ArrayList<>();
-
-                if (data.has("layers") && data.get("layers").isJsonArray()) {
-                    // Layered format: { "layers": [ { "y": 0, "blocks": [ {"x":0,"z":0,"block":"stone"}, ... ] }, ... ] }
-                    JsonArray layersArray = data.getAsJsonArray("layers");
-                    for (JsonElement layerElement : layersArray) {
-                        try {
-                            JsonObject layer = layerElement.getAsJsonObject();
-                            int layerY = layer.has("y") ? layer.get("y").getAsInt() : 0;
-                            if (layer.has("blocks") && layer.get("blocks").isJsonArray()) {
-                                JsonArray layerBlocks = layer.getAsJsonArray("blocks");
-                                for (JsonElement blockElement : layerBlocks) {
-                                    try {
-                                        JsonObject block = blockElement.getAsJsonObject();
-                                        int x = block.get("x").getAsInt();
-                                        int z = block.get("z").getAsInt();
-                                        // Use block-level y if present, otherwise use layer y
-                                        int y = block.has("y") ? block.get("y").getAsInt() : layerY;
-                                        String blockName = block.get("block").getAsString();
-                                        parsedCoords.add(new int[]{x, y, z});
-                                        parsedBlockNames.add(blockName);
-                                    } catch (Exception e) {
-                                        plugin.getLogger().warning("Skipping invalid block in layer: " + e.getMessage());
-                                    }
-                                }
-                            }
-                        } catch (Exception e) {
-                            plugin.getLogger().warning("Skipping invalid layer in AI structure: " + e.getMessage());
-                        }
-                    }
-                } else if (data.has("blocks") && data.get("blocks").isJsonArray()) {
-                    // Flat format: { "blocks": [ {"x":0,"y":0,"z":0,"block":"stone"}, ... ] }
-                    JsonArray blocksArray = data.getAsJsonArray("blocks");
-                    for (JsonElement element : blocksArray) {
-                        try {
-                            JsonObject block = element.getAsJsonObject();
-                            int x = block.get("x").getAsInt();
-                            int y = block.get("y").getAsInt();
-                            int z = block.get("z").getAsInt();
-                            String blockName = block.get("block").getAsString();
-                            parsedCoords.add(new int[]{x, y, z});
-                            parsedBlockNames.add(blockName);
-                        } catch (Exception e) {
-                            plugin.getLogger().warning("Skipping invalid block entry in AI structure: " + e.getMessage());
-                        }
-                    }
-                } else {
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
-                            msg.sendError(player, "Invalid API response: missing 'blocks' or 'layers' array."));
-                    return;
-                }
-
-                if (parsedCoords.isEmpty()) {
-                    org.bukkit.Bukkit.getScheduler().runTask(plugin, () ->
-                            msg.sendError(player, "Structure contains no valid block entries!"));
-                    return;
-                }
-
-                final String finalName = name;
-                final int finalBlockCount = blockCount;
-
-                // Switch to main thread for block placement
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    try {
-                        if (!player.isOnline()) return;
-
-                        ConfigManager config = plugin.getConfigManager();
-
-                        if (config.getMaxBlocks() > 0 && finalBlockCount > config.getMaxBlocks()) {
-                            msg.sendError(player, "Structure has " + finalBlockCount + " blocks, but the limit is " + config.getMaxBlocks() + "!");
-                            return;
-                        }
-
-                        Map<Location, BlockData> blockMap = new LinkedHashMap<>();
-                        int failedBlocks = 0;
-
-                        for (int i = 0; i < parsedCoords.size(); i++) {
-                            int[] coords = parsedCoords.get(i);
-                            String blockName = parsedBlockNames.get(i);
-
-                            Location loc = new Location(world,
-                                    origin.getBlockX() + coords[0],
-                                    origin.getBlockY() + coords[1],
-                                    origin.getBlockZ() + coords[2]);
-
-                            BlockData blockData = null;
-
-                            // Normalize block name: strip "minecraft:" prefix if present for consistent handling
-                            String normalizedName = blockName;
-                            if (normalizedName.startsWith("minecraft:")) {
-                                normalizedName = normalizedName.substring("minecraft:".length());
-                            }
-
-                            // Extract base name and properties (e.g., "dark_oak_stairs[facing=north,half=top]")
-                            String baseName = normalizedName;
-                            String properties = "";
-                            int bracketIdx = normalizedName.indexOf('[');
-                            if (bracketIdx >= 0) {
-                                baseName = normalizedName.substring(0, bracketIdx);
-                                properties = normalizedName.substring(bracketIdx);
-                            }
-
-                            // Try full block data string with minecraft: prefix (handles block states)
-                            try {
-                                blockData = org.bukkit.Bukkit.createBlockData("minecraft:" + normalizedName);
-                            } catch (Exception e1) {
-                                // Try without prefix
-                                try {
-                                    blockData = org.bukkit.Bukkit.createBlockData(normalizedName);
-                                } catch (Exception e2) {
-                                    // Try base name only (without properties) with minecraft: prefix
-                                    try {
-                                        blockData = org.bukkit.Bukkit.createBlockData("minecraft:" + baseName);
-                                    } catch (Exception e3) {
-                                        // Try matching material name from base name
-                                        try {
-                                            Material mat = Material.matchMaterial(baseName);
-                                            if (mat != null && mat.isBlock()) {
-                                                blockData = mat.createBlockData();
-                                            }
-                                        } catch (Exception e4) {
-                                            // Try matching with original blockName
-                                            try {
-                                                Material mat = Material.matchMaterial(blockName);
-                                                if (mat != null && mat.isBlock()) {
-                                                    blockData = mat.createBlockData();
-                                                }
-                                            } catch (Exception e5) {
-                                                // ignore
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (blockData == null) {
-                                blockData = Material.STONE.createBlockData();
-                                failedBlocks++;
-                                if (failedBlocks <= 5) {
-                                    plugin.getLogger().warning("[AI Build] Failed to resolve block: '" + blockName + "' at relative (" + coords[0] + "," + coords[1] + "," + coords[2] + ")");
-                                } else if (failedBlocks == 6) {
-                                    plugin.getLogger().warning("[AI Build] Suppressing further block resolution warnings...");
-                                }
-                            }
-
-                            blockMap.put(loc, blockData);
-                        }
-
-                        if (blockMap.isEmpty()) {
-                            msg.sendError(player, "Structure contains no valid blocks!");
-                            return;
-                        }
-
-                        if (failedBlocks > 0) {
-                            msg.sendWarning(player, failedBlocks + " block(s) could not be resolved and were replaced with stone.");
-                        }
-
-                        msg.sendInfo(player, "Building <white>" + finalName + "</white> (" + blockMap.size() + " blocks)...");
-                        getBlockPlacer().placeGradientBlocks(player, blockMap, "AI: " + finalName);
-                    } catch (Exception e) {
-                        msg.sendError(player, "Error placing structure: " + e.getMessage());
-                        plugin.getLogger().warning("Error placing AI structure: " + e.getMessage());
-                        e.printStackTrace();
-                    }
-                });
-
-            } catch (java.net.http.HttpConnectTimeoutException e) {
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    msg.sendError(player, "Connection timed out! Check your server's internet connection.");
-                    plugin.getLogger().warning("AI Build connection timeout: " + e.getMessage());
-                });
-            } catch (java.net.http.HttpTimeoutException e) {
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    msg.sendError(player, "Request timed out! The API may be slow or unreachable.");
-                    plugin.getLogger().warning("AI Build request timeout: " + e.getMessage());
-                });
-            } catch (javax.net.ssl.SSLException e) {
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    msg.sendError(player, "SSL/TLS error! Check your server's Java certificates.");
-                    plugin.getLogger().warning("AI Build SSL error: " + e.getMessage());
-                });
-            } catch (java.io.IOException e) {
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    msg.sendError(player, "Network error: " + e.getMessage());
-                    plugin.getLogger().warning("AI Build IO error: " + e.getMessage());
-                });
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    msg.sendError(player, "Request was interrupted.");
-                    plugin.getLogger().warning("AI Build interrupted: " + e.getMessage());
-                });
-            } catch (Exception e) {
-                org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-                    msg.sendError(player, "Failed to fetch structure: " + e.getMessage());
-                    plugin.getLogger().warning("Error fetching AI structure: " + e.getMessage());
-                    e.printStackTrace();
-                });
+            } else {
+                positional.add(args[i]);
             }
-        });
+        }
+
+        if (hollow) {
+            if (!HOLLOW_CAPABLE.contains(shapeName)) {
+                msg.sendError(player, "<white>" + args[1] + "</white> does not support hollow mode.");
+                return;
+            }
+            positional.add(hollowThickness);
+            positional.set(0, "h" + abbrev);
+        } else {
+            positional.set(0, abbrev);
+        }
+
+        String finalAbbrev = positional.get(0);
+        String[] shapeArgs = positional.toArray(new String[0]);
+        handleShapeCommand(player, finalAbbrev, shapeArgs);
+    }
+
+    private void handleNewGradientCommand(Player player, String[] args) {
+        // args: ["gradient", <name>, <colors>, [params...], [-h [thick]], [flags...]]
+        MessageUtil msg = plugin.getMessageUtil();
+
+        String shapeName = args[1].toLowerCase();
+        String abbrev = SHAPE_ALIAS_MAP.get(shapeName);
+        if (abbrev == null || abbrev.equals("tree") || abbrev.equals("scyl")) {
+            msg.sendError(player, "Gradient is not supported for: " + args[1]);
+            return;
+        }
+
+        boolean hollow = false;
+        String hollowThickness = "1";
+        List<String> positional = new ArrayList<>();
+        List<String> flags = new ArrayList<>();
+
+        for (int i = 3; i < args.length; i++) {
+            String a = args[i];
+            if (a.equalsIgnoreCase("-h")) {
+                hollow = true;
+                if (i + 1 < args.length && isPositiveInt(args[i + 1])) {
+                    hollowThickness = args[++i];
+                }
+            } else if ((a.equalsIgnoreCase("-dir") || a.equalsIgnoreCase("-interp")) && i + 1 < args.length) {
+                flags.add(a);
+                flags.add(args[++i]);
+            } else if (a.equalsIgnoreCase("-unique")) {
+                flags.add(a);
+            } else {
+                positional.add(a);
+            }
+        }
+
+        if (hollow) {
+            if (!HOLLOW_CAPABLE.contains(shapeName)) {
+                msg.sendError(player, "<white>" + args[1] + "</white> does not support hollow mode.");
+                return;
+            }
+            positional.add(hollowThickness);
+        }
+
+        String gradAbbrev = (hollow ? "gh" : "g") + abbrev;
+
+        List<String> finalArgs = new ArrayList<>();
+        finalArgs.add(gradAbbrev);
+        finalArgs.add(args[2]);
+        finalArgs.addAll(positional);
+        finalArgs.addAll(flags);
+
+        handleGradientCommand(player, gradAbbrev, finalArgs.toArray(new String[0]));
+    }
+
+    private void handlePathSubCommand(Player player, String[] args) {
+        // args: ["path", <sub>, [sub-args...]]
+        MessageUtil msg = plugin.getMessageUtil();
+        String sub = args[1].toLowerCase();
+
+        switch (sub) {
+            case "help" -> plugin.getPathToolManager().sendHelp(player);
+            case "tool" -> {
+                if (args.length < 3) { msg.sendUsage(player, "/mct path tool <enable|disable>"); return; }
+                boolean enable = args[2].equalsIgnoreCase("enable");
+                boolean disable = args[2].equalsIgnoreCase("disable");
+                if (!enable && !disable) { msg.sendUsage(player, "/mct path tool <enable|disable>"); return; }
+                plugin.getPathToolManager().handleToolToggle(player, enable);
+            }
+            case "mode" -> {
+                if (args.length < 3) { msg.sendUsage(player, "/mct path mode <road|bridge|curve>"); return; }
+                plugin.getPathToolManager().handleModeSet(player, args[2]);
+            }
+            case "pos" -> {
+                if (args.length < 3) { msg.sendUsage(player, "/mct path pos <list|undo|clear>"); return; }
+                plugin.getPathToolManager().handlePos(player, args[2]);
+            }
+            case "set" -> {
+                String[] setArgs = new String[Math.max(0, args.length - 2)];
+                System.arraycopy(args, 2, setArgs, 0, setArgs.length);
+                plugin.getPathToolManager().handleSet(player, setArgs);
+            }
+            case "preview" -> {
+                if (args.length < 3) { msg.sendUsage(player, "/mct path preview <on|off>"); return; }
+                plugin.getPathToolManager().handlePreview(player, args[2]);
+            }
+            case "generate" -> {
+                if (!player.hasPermission("mctools.path.generate")) {
+                    msg.sendError(player, "You don't have permission to generate path structures!");
+                    return;
+                }
+                plugin.getPathToolManager().handleGenerate(player);
+            }
+            case "particles" -> {
+                if (args.length < 3) { msg.sendUsage(player, "/mct path particles <on|off>"); return; }
+                plugin.getPathToolManager().handleParticlesToggle(player, args[2]);
+            }
+            case "clear", "sel" -> plugin.getPathToolManager().handleSelectionReset(player);
+            default -> msg.sendError(player, "Unknown path subcommand. Use /mct path help.");
+        }
+    }
+
+    private static boolean isPositiveInt(String s) {
+        try { return Integer.parseInt(s) > 0; } catch (NumberFormatException e) { return false; }
     }
 
     private boolean checkCooldown(Player player) {
@@ -1005,7 +947,8 @@ public class MCToolsCommand implements CommandExecutor {
         "cir", "sq", "rect", "ell", "poly", "star", "line", "spi",
         "hcir", "hsq", "hrect", "hell", "hpoly",
         "sph", "dome", "cyl", "cone", "pyr", "arch", "torus", "tor", "helix", "hel", "wall", "tube", "capsule", "ellipsoid",
-        "hsph", "hdome", "hcyl", "hcone", "hpyr", "harch", "htorus", "htor", "hcapsule", "hellipsoid"
+        "hsph", "hdome", "hcyl", "hcone", "hpyr", "harch", "htorus", "htor", "hcapsule", "hellipsoid",
+        "scyl"
     );
 
     private void handleShapeCommand(Player player, String shapeCmd, String[] args) {
@@ -1016,6 +959,12 @@ public class MCToolsCommand implements CommandExecutor {
 
         if (shapeCmd.startsWith("g")) {
             handleGradientCommand(player, shapeCmd, args);
+            return;
+        }
+
+        // Section Cylinder uses dual-block placement (outline + fill), handle separately
+        if (shapeCmd.equals("scyl")) {
+            handleSectionCylinderCommand(player, args);
             return;
         }
 
@@ -1083,6 +1032,106 @@ public class MCToolsCommand implements CommandExecutor {
             msg.sendRaw(player, plugin.getPerformanceMonitor().getFullPerformanceSummaryMiniMessage());
         }
         getBlockPlacer().placeBlocks(player, blocks, blockData, shape.getName());
+    }
+
+    /**
+     * Handles the Section Cylinder command which uses two block types:
+     * one for the outline/dividers and one for the fill sections.
+     * Syntax: /mct scyl <block> <radius> <sections> <sectionBlock>
+     */
+    private void handleSectionCylinderCommand(Player player, String[] args) {
+        MessageUtil msg = plugin.getMessageUtil();
+        ConfigManager config = plugin.getConfigManager();
+
+        if (args.length < 5) {
+            msg.sendUsage(player, "/mct scyl <block> <radius> <sections> <sectionBlock>");
+            return;
+        }
+
+        // Parse outline block
+        BlockData outlineBlock = parseBlockData(args[1]);
+        if (outlineBlock == null) {
+            msg.sendError(player, "Invalid block type: " + args[1]);
+            suggestBlock(player, args[1]);
+            return;
+        }
+
+        // Parse radius (scyl supports up to 500)
+        int radius;
+        try {
+            radius = parseInt(args[2], "radius");
+            if (radius > 500) {
+                msg.sendError(player, "Radius " + radius + " exceeds maximum of 500!");
+                return;
+            }
+        } catch (IllegalArgumentException e) {
+            msg.sendError(player, e.getMessage());
+            return;
+        }
+
+        // Parse sections
+        int sections;
+        try {
+            sections = parseInt(args[3], "sections");
+            if (sections < 2) {
+                msg.sendError(player, "Sections must be at least 2!");
+                return;
+            }
+            if (sections > 64) {
+                msg.sendError(player, "Sections must be at most 64!");
+                return;
+            }
+        } catch (IllegalArgumentException e) {
+            msg.sendError(player, e.getMessage());
+            return;
+        }
+
+        // Parse section fill block
+        BlockData sectionBlock = parseBlockData(args[4]);
+        if (sectionBlock == null) {
+            msg.sendError(player, "Invalid section block type: " + args[4]);
+            suggestBlock(player, args[4]);
+            return;
+        }
+
+        SectionCylinder shape = new SectionCylinder(radius, sections);
+        shape.setSectionBlockData(sectionBlock);
+
+        if (!player.hasPermission(shape.getPermission())) {
+            msg.sendError(player, "You don't have permission to create " + shape.getName() + "s!");
+            return;
+        }
+
+        int estimated = shape.getEstimatedBlockCount();
+        int maxBlocks = config.getMaxBlocks();
+
+        if (maxBlocks > 0 && estimated > maxBlocks) {
+            msg.sendError(player, "Operation would place ~" + String.format("%,d", estimated) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce the shape size or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
+            return;
+        }
+
+        Location center = player.getLocation();
+        Map<Location, BlockData> blockMap = shape.generateWithSections(center, outlineBlock);
+
+        if (blockMap.isEmpty()) {
+            msg.sendError(player, "No blocks to place!");
+            return;
+        }
+
+        if (maxBlocks > 0 && blockMap.size() > maxBlocks) {
+            msg.sendError(player, "Operation would place " + String.format("%,d", blockMap.size()) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce the shape size or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
+            return;
+        }
+
+        msg.sendInfo(player, "Preparing " + shape.getName() + " (" + sections + " sections) with " + String.format("%,d", blockMap.size()) + " blocks...");
+        if (blockMap.size() > 1000) {
+            msg.sendRaw(player, plugin.getPerformanceMonitor().getFullPerformanceSummaryMiniMessage());
+        }
+        getBlockPlacer().placeGradientBlocks(player, blockMap, shape.getName());
     }
 
     private void handleGradientCommand(Player player, String cmd, String[] args) {
@@ -1823,6 +1872,7 @@ public class MCToolsCommand implements CommandExecutor {
         player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct tube", "<block>", "<radius>", "<height>", "<radius>"), "Tube")));
         player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct capsule", "<block>", "<radius>", "<height>"), "Capsule")));
         player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct ellipsoid", "<block>", "<radius>", "<height>", "<radius>"), "Ellipsoid")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct scyl", "<block>", "<radius>", "<sections>", "<sectionBlock>"), "Section Cylinder")));
 
         // Gradient Shapes
         player.sendMessage(msg.parse(""));
@@ -1836,11 +1886,6 @@ public class MCToolsCommand implements CommandExecutor {
         player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct tree", "<woodType>", "[options]"), "Generate custom tree")));
         player.sendMessage(msg.parse(msg.buildHint("Options: seed: th: tr: bd: fd: fr: -roots -special")));
         player.sendMessage(msg.parse(msg.buildHint("Types: oak, spruce, birch, jungle, acacia, dark_oak, mangrove, cherry, crimson, warped")));
-
-        // AI Builder
-        player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("  " + msg.buildCategory("AI Builder")));
-        player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct build", "<structureId>"), "Fetch and place AI-generated structure")));
 
         // Utility
         player.sendMessage(msg.parse(""));
@@ -1912,7 +1957,7 @@ public class MCToolsCommand implements CommandExecutor {
             case "capsule" -> new ShapeInfo("Capsule", "/mct capsule <block> <radius> <height>", "Creates a capsule (cylinder with dome ends).");
             case "ellipsoid" -> new ShapeInfo("Ellipsoid", "/mct ellipsoid <block> <radiusX> <radiusY> <radiusZ>", "Creates an ellipsoid with different radii.");
             case "tree" -> new ShapeInfo("Tree", "/mct tree <woodType> [options]", "Generates a custom tree. Options: seed: th: tr: bd: fd: fr: -roots -special");
-            case "build" -> new ShapeInfo("AI Build", "/mct build <structureId>", "Fetches and places an AI-generated structure from the API.");
+            case "scyl", "sectioncylinder" -> new ShapeInfo("Section Cylinder", "/mct scyl <block> <radius> <sections> <sectionBlock>", "Creates a flat disc divided into equal angular sections with divider lines.");
             default -> null;
         };
 
@@ -1933,16 +1978,18 @@ public class MCToolsCommand implements CommandExecutor {
         MessageUtil msg = plugin.getMessageUtil();
 
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("        <gradient:#34d399:#10b981><bold>M C T O O L S</bold></gradient>"));
-        player.sendMessage(msg.parse("            <" + MessageUtil.MUTED_COLOR + ">version</> <white>1.3.0</white>"));
+        player.sendMessage(msg.parse("              <gradient:#34d399:#10b981><bold>M C T O O L S</bold></gradient>"));
+        player.sendMessage(msg.parse("                 <" + MessageUtil.MUTED_COLOR + ">version</" + MessageUtil.MUTED_COLOR + "> <white>" + plugin.getDescription().getVersion() + "</white>"));
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("   <" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + "> <" + MessageUtil.ERROR_COLOR + "><bold><click:open_url:'https://github.com/PenguinStudiosOrganization/MCTools/releases/'><hover:show_text:'<white>Open GitHub Releases</white>'>[GitHub]</hover></click></bold></" + MessageUtil.ERROR_COLOR + "> " +
+        player.sendMessage(msg.parse("       <" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + "> <" + MessageUtil.ERROR_COLOR + "><bold><click:open_url:'https://github.com/PenguinStudiosOrganization/MCTools/releases/'><hover:show_text:'<white>Open GitHub Releases</white>'>[GitHub]</hover></click></bold></" + MessageUtil.ERROR_COLOR + "> " +
                                      "<" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + "> <" + MessageUtil.INFO_COLOR + "><bold><click:open_url:'https://discord.penguinstudios.eu/'><hover:show_text:'<white>Join our Discord</white>'>[Discord]</hover></click></bold></" + MessageUtil.INFO_COLOR + "> " +
-                                     "<" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + "> <" + MessageUtil.SUCCESS_COLOR + "><bold><click:open_url:'https://mcutils.net/'><hover:show_text:'<white>Visit MCUtils</white>'>[MCUtils]</hover></click></bold></" + MessageUtil.SUCCESS_COLOR + "> " +
+                                     "<" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + "> <" + MessageUtil.SUCCESS_COLOR + "><bold><click:open_url:'https://penguinstudios.eu/'><hover:show_text:'<white>Visit PenguinStudios</white>'>[Website]</hover></click></bold></" + MessageUtil.SUCCESS_COLOR + "> " +
                                      "<" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + ">"));
-        player.sendMessage(msg.parse("   <" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + "> <" + MessageUtil.ACCENT_COLOR + "><bold><click:open_url:'https://penguinstudios.eu/'><hover:show_text:'<white>Visit PenguinStudios</white>'>[PenguinStudios]</hover></click></bold></" + MessageUtil.ACCENT_COLOR + "> <" + MessageUtil.DIM_COLOR + ">│</" + MessageUtil.DIM_COLOR + ">"));
         player.sendMessage(msg.parse(""));
-        player.sendMessage(msg.parse("   <" + MessageUtil.MUTED_COLOR + "><italic>Not affiliated with Mojang AB or Microsoft.</italic></" + MessageUtil.MUTED_COLOR + ">"));
+        player.sendMessage(msg.parse("           <" + MessageUtil.MUTED_COLOR + ">a</" + MessageUtil.MUTED_COLOR + "> <gradient:#38bdf8:#2563eb>PenguinStudios</gradient> <" + MessageUtil.MUTED_COLOR + ">product</" + MessageUtil.MUTED_COLOR + ">"));
+        player.sendMessage(msg.parse("          <" + MessageUtil.MUTED_COLOR + ">developed by</" + MessageUtil.MUTED_COLOR + "> <white>D3xts</white> <" + MessageUtil.MUTED_COLOR + ">&</" + MessageUtil.MUTED_COLOR + "> <white>Raffymimi</white>"));
+        player.sendMessage(msg.parse(""));
+        player.sendMessage(msg.parse("     <" + MessageUtil.MUTED_COLOR + "><italic>Not affiliated with Mojang AB or Microsoft.</italic></" + MessageUtil.MUTED_COLOR + ">"));
         player.sendMessage(msg.parse(""));
     }
     

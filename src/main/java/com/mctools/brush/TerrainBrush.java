@@ -1004,8 +1004,7 @@ public class TerrainBrush {
     }
 
     private double getBrightness(BufferedImage img, int x, int y) {
-        int rgb = img.getRGB(x, y);
-        return (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / (3.0 * 255.0);
+        return BrushManager.getPixelBrightness(img, x, y);
     }
 
     private double[][] gaussianSmooth(double[][] heights, int strength) {

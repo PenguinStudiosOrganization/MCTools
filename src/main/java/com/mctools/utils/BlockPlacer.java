@@ -55,9 +55,7 @@ public class BlockPlacer {
     }
 
     public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName) {
-        // Detect AI builds to skip floating cleanup (AI structures are intentionally designed)
-        boolean isAiBuild = shapeName != null && shapeName.startsWith("AI: ");
-        placeGradientBlocks(player, blockMap, shapeName, !isAiBuild);
+        placeGradientBlocks(player, blockMap, shapeName, true);
     }
 
     public void placeGradientBlocks(Player player, Map<Location, BlockData> blockMap, String shapeName, boolean enableFloatingCleanup) {
@@ -68,12 +66,9 @@ public class BlockPlacer {
 
         List<Location> blocks = new ArrayList<>(blockMap.keySet());
 
-        plugin.getLogger().info("[AI Build] Starting placement for " + player.getName() + ": " + blocks.size() + " blocks, shape: " + shapeName);
-
         String safetyCheck = plugin.getPerformanceMonitor().checkOperationSafety(blocks.size());
         if (safetyCheck != null) {
             plugin.getMessageUtil().sendError(player, safetyCheck);
-            plugin.getLogger().info("[AI Build] Safety check failed: " + safetyCheck);
             playErrorEffects(player);
             return;
         }
@@ -87,12 +82,10 @@ public class BlockPlacer {
 
         ConfigManager config = plugin.getConfigManager();
         if (config.isPreviewEnabled()) {
-            plugin.getLogger().info("[AI Build] Starting preview for " + player.getName());
             PreviewTask previewTask = new PreviewTask(player, blocks, null, originalBlocks, shapeName, blockMap, enableFloatingCleanup);
             previewTasks.put(player.getUniqueId(), previewTask);
             previewTask.start();
         } else {
-            plugin.getLogger().info("[AI Build] Preview disabled, starting direct placement for " + player.getName());
             startPlacement(player, blocks, null, originalBlocks, shapeName, blockMap, enableFloatingCleanup);
         }
     }

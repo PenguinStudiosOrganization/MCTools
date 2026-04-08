@@ -64,11 +64,6 @@ public class ConfigManager {
     private Set<Material> floatingCleanupWhitelist;
     private Set<Material> floatingCleanupBlacklist;
 
-    // AI Build settings
-    private boolean aiBuildEnabled;
-    private String aiBuildApiUrl;
-    private int aiBuildTimeout;
-
     // Brush settings
     private boolean brushEnabled;
     private String brushPermission;
@@ -94,7 +89,7 @@ public class ConfigManager {
 
     private void loadValues() {
         // Shape generation
-        maxBlocks = config.getInt("max-blocks", 500000);
+        maxBlocks = config.getInt("max-blocks", 0);
         maxRadius = config.getInt("max-radius", 128);
         maxHeight = config.getInt("max-height", 128);
         maxThickness = config.getInt("max-thickness", 32);
@@ -133,11 +128,6 @@ public class ConfigManager {
 
         floatingCleanupWhitelist = parseMaterialList(config.getStringList("floating-cleanup.whitelist"));
         floatingCleanupBlacklist = parseMaterialList(config.getStringList("floating-cleanup.blacklist"));
-
-        // AI Build
-        aiBuildEnabled = config.getBoolean("ai-build.enabled", true);
-        aiBuildApiUrl = config.getString("ai-build.api-url", "https://mcutils.net/api/tools/shape-ai/structures");
-        aiBuildTimeout = config.getInt("ai-build.timeout", 10);
 
         // Brush settings
         brushEnabled = config.getBoolean("brush.enabled", true);
@@ -190,11 +180,6 @@ public class ConfigManager {
     public int getFloatingCleanupPadding() { return floatingCleanupPadding; }
     public Set<Material> getFloatingCleanupWhitelist() { return floatingCleanupWhitelist; }
     public Set<Material> getFloatingCleanupBlacklist() { return floatingCleanupBlacklist; }
-
-    // AI Build getters
-    public boolean isAiBuildEnabled() { return aiBuildEnabled; }
-    public String getAiBuildApiUrl() { return aiBuildApiUrl; }
-    public int getAiBuildTimeout() { return aiBuildTimeout; }
 
     // Brush getters
     public boolean isBrushEnabled() { return brushEnabled; }

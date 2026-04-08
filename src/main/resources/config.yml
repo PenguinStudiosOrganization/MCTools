@@ -6,7 +6,7 @@
 
 # Maximum blocks per operation (applies to everyone, no bypass)
 # Set to 0 to disable the limit entirely
-max-blocks: 500000
+max-blocks: 0
 
 # Maximum radius/size allowed
 max-radius: 128
@@ -78,18 +78,6 @@ brush:
   
   # Folder for heightmap images (inside plugin folder)
   heightmaps-folder: heightmaps
-
-# ============================================
-# AI BUILD SETTINGS
-# ============================================
-
-ai-build:
-  # Enable AI structure building
-  enabled: true
-  # API base URL for fetching AI structures (no trailing slash)
-  api-url: "https://mcutils.net/api/tools/shape-ai/structures"
-  # Request timeout in seconds
-  timeout: 10
 
 # ============================================
 # PATH TOOL SETTINGS (Curve / Road / Bridge)

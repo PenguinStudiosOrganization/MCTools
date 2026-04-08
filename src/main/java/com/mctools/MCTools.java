@@ -7,6 +7,7 @@ import com.mctools.commands.MCToolsTabCompleter;
 import com.mctools.listeners.PlayerListener;
 import com.mctools.path.PathToolManager;
 import com.mctools.schematic.SchematicManager;
+import com.mctools.update.UpdateChecker;
 import com.mctools.utils.BlockPlacer;
 import com.mctools.utils.ConfigManager;
 import com.mctools.utils.MessageUtil;
@@ -25,7 +26,7 @@ import org.bukkit.plugin.java.JavaPlugin;
  * preview mode with teleportation, an undo/redo system (up to 1000 operations),
  * and async block placement with adaptive throttling.</p>
  *
- * @see <a href="https://mcutils.net/">Website</a>
+ * @see <a href="https://penguinstudios.eu/">Website</a>
  * @see <a href="https://github.com/PenguinStudiosOrganization/MCTools/releases/tag/Release">Releases</a>
  */
 public final class MCTools extends JavaPlugin {
@@ -40,6 +41,7 @@ public final class MCTools extends JavaPlugin {
     private BlockPlacer blockPlacer;
     private PathToolManager pathToolManager;
     private PlayerListener playerListener;
+    private UpdateChecker updateChecker;
 
     public static MCTools getInstance() {
         return instance;
@@ -66,6 +68,10 @@ public final class MCTools extends JavaPlugin {
         playerListener = new PlayerListener(this);
         getServer().getPluginManager().registerEvents(playerListener, this);
 
+        // Update checker (async, non-blocking).
+        updateChecker = new UpdateChecker(this);
+        updateChecker.start();
+
         long loadTime = System.currentTimeMillis() - startTime;
 
         // Keep startup logs simple and consistent with the server logger.
@@ -73,36 +79,39 @@ public final class MCTools extends JavaPlugin {
     }
     
     /**
-     * Startup log.
-     *
-     * <p>Keep logs readable in any console (no ANSI art), and use the plugin logger
-     * so messages are properly tagged by the server.</p>
+     * Startup log — colored banner via legacy § codes sent to the console sender.
      */
     private void logStartup(long loadTimeMs) {
         String version = getDescription().getVersion();
+        org.bukkit.command.ConsoleCommandSender console = org.bukkit.Bukkit.getConsoleSender();
 
-        java.util.logging.Logger log = getLogger();
-        log.info("");
-        log.info("╔════════════════════════════════════════════╗");
-        log.info("║           M C T O O L S                   ║");
-        log.info("║       Advanced Shape Generation           ║");
-        log.info("╠════════════════════════════════════════════╣");
-        log.info("║ Version:  v" + version + padSpaces(32 - version.length()) + "║");
-        log.info("║ Author:   PenguinStudios                  ║");
-        log.info("║ Web:      https://mcutils.net              ║");
-        log.info("║ Discord:  https://discord.penguinstudios.eu║");
-        log.info("╠════════════════════════════════════════════╣");
-        log.info("║ ✓ Configuration loaded                    ║");
-        log.info("║ ✓ Commands registered                     ║");
-        log.info("║ ✓ Terrain brush system                    ║");
-        log.info("║ ✓ Undo/Redo system (1000 ops)             ║");
-        log.info("║ ✓ Preview with teleportation              ║");
-        log.info("║ ✓ Schematic system                        ║");
-        log.info("╠════════════════════════════════════════════╣");
-        log.info("║ Load time: " + loadTimeMs + "ms" + padSpaces(31 - String.valueOf(loadTimeMs).length()) + "║");
-        log.info("║ Status:    ● READY                        ║");
-        log.info("╚════════════════════════════════════════════╝");
-        log.info("");
+        console.sendMessage("§r");
+        console.sendMessage("§a  __  __  ___ _____         _    ");
+        console.sendMessage("§a |  \\/  |/ __|_   _|__  ___| |___");
+        console.sendMessage("§a | |\\/| | (__  | |/ _ \\/ _ \\ (_-<");
+        console.sendMessage("§a |_|  |_|\\___| |_|\\___/\\___/_/__/");
+        console.sendMessage("§r");
+        console.sendMessage("§8┌─────────────────────────────────────────────┐");
+        console.sendMessage("§8│  §aVersion   §f" + version + padSpaces(33 - version.length()) + "§8│");
+        console.sendMessage("§8│  §aAuthor    §fPenguinStudios" + padSpaces(19) + "§8│");
+        console.sendMessage("§8│  §aWebsite   §fpenguinstudios.eu" + padSpaces(17) + "§8│");
+        console.sendMessage("§8│  §aDiscord   §fdiscord.penguinstudios.eu" + padSpaces(7) + "§8│");
+        console.sendMessage("§8├─────────────────────────────────────────────┤");
+        console.sendMessage("§8│  §a✔ §fConfiguration loaded" + padSpaces(21) + "§8│");
+        console.sendMessage("§8│  §a✔ §fCommands registered" + padSpaces(22) + "§8│");
+        console.sendMessage("§8│  §a✔ §fTerrain brush system" + padSpaces(21) + "§8│");
+        console.sendMessage("§8│  §a✔ §fUndo / Redo  §7(up to 1000 ops)§f" + padSpaces(12) + "§8│");
+        console.sendMessage("§8│  §a✔ §fPreview with teleportation" + padSpaces(15) + "§8│");
+        console.sendMessage("§8│  §a✔ §fPath tool  §7(road / bridge / curve)§f" + padSpaces(7) + "§8│");
+        console.sendMessage("§8│  §a✔ §fSchematic system" + padSpaces(25) + "§8│");
+        console.sendMessage("§8│  §a✔ §fAsync block placement" + padSpaces(20) + "§8│");
+        console.sendMessage("§8│  §a✔ §fUpdate checker" + padSpaces(27) + "§8│");
+        console.sendMessage("§8├─────────────────────────────────────────────┤");
+        String loadStr = loadTimeMs + "ms";
+        console.sendMessage("§8│  §7Load time  §f" + loadStr + padSpaces(32 - loadStr.length()) + "§8│");
+        console.sendMessage("§8│  §7Status     §a● READY" + padSpaces(25) + "§8│");
+        console.sendMessage("§8└─────────────────────────────────────────────┘");
+        console.sendMessage("§r");
     }
 
     private String padSpaces(int count) {
@@ -113,6 +122,10 @@ public final class MCTools extends JavaPlugin {
     @Override
     public void onDisable() {
         // Stop background tasks first.
+        if (updateChecker != null) {
+            updateChecker.shutdown();
+        }
+
         if (performanceMonitor != null) {
             performanceMonitor.stop();
         }
@@ -194,5 +207,9 @@ public final class MCTools extends JavaPlugin {
     
     public PathToolManager getPathToolManager() {
         return pathToolManager;
+    }
+
+    public UpdateChecker getUpdateChecker() {
+        return updateChecker;
     }
 }

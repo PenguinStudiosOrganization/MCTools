@@ -4,11 +4,14 @@ import com.mctools.MCTools;
 import org.bukkit.Material;
 
 import javax.imageio.ImageIO;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+
 
 /**
  * Manages heightmap files and per-player brush settings.
@@ -65,13 +68,18 @@ public class BrushManager {
 
         for (File file : files) {
             try {
-                BufferedImage image = ImageIO.read(file);
-                if (image != null) {
+                BufferedImage rawImage = ImageIO.read(file);
+                if (rawImage != null) {
+                    // Convert to TYPE_INT_ARGB to normalise all image formats
+                    // (grayscale, 16-bit, premultiplied alpha, indexed, etc.)
+                    // so that getRGB() always returns correct, non-premultiplied values.
+                    BufferedImage image = normalizeImage(rawImage);
                     String name = file.getName();
                     heightmapCache.put(name, image);
                     availableHeightmaps.add(name);
                     plugin.getLogger().info("Loaded heightmap: " + name + 
-                            " (" + image.getWidth() + "x" + image.getHeight() + ")");
+                            " (" + image.getWidth() + "x" + image.getHeight() + 
+                            ", type " + rawImage.getType() + " → normalized)");
                 }
             } catch (IOException e) {
                 plugin.getLogger().warning("Failed to load heightmap: " + file.getName());
@@ -120,6 +128,23 @@ public class BrushManager {
         loadHeightmaps();
     }
 
+    /**
+     * Normalizes any BufferedImage to TYPE_INT_ARGB so that getRGB()
+     * always returns correct, non-premultiplied ARGB values regardless
+     * of the source format (grayscale, 16-bit, indexed, premultiplied, etc.).
+     */
+    private BufferedImage normalizeImage(BufferedImage src) {
+        // If already TYPE_INT_ARGB, no conversion needed
+        if (src.getType() == BufferedImage.TYPE_INT_ARGB) {
+            return src;
+        }
+        BufferedImage dst = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = dst.createGraphics();
+        g.drawImage(src, 0, 0, null);
+        g.dispose();
+        return dst;
+    }
+
     /** Returns the height value (0.0–1.0) from a heightmap at normalized coordinates. */
     public double getHeightAt(BufferedImage heightmap, double normalizedX, double normalizedZ) {
         if (heightmap == null) return 0;
@@ -133,10 +158,32 @@ public class BrushManager {
         imgX = Math.max(0, Math.min(imgWidth - 1, imgX));
         imgY = Math.max(0, Math.min(imgHeight - 1, imgY));
         
-        int rgb = heightmap.getRGB(imgX, imgY);
-        int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
-        
-        return gray / 255.0;
+        return getPixelBrightness(heightmap, imgX, imgY);
+    }
+
+    /**
+     * Reads the brightness of a pixel, taking into account the alpha channel.
+     * If the RGB channels are all zero but alpha is non-zero, the alpha
+     * channel is used as the height value (some heightmaps encode depth in alpha).
+     * Otherwise the standard luminance-weighted average of RGB is returned.
+     */
+    public static double getPixelBrightness(BufferedImage img, int x, int y) {
+        int argb = img.getRGB(x, y);
+        int a = (argb >> 24) & 0xFF;
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+
+        // If the pixel is fully transparent, treat as zero height
+        if (a == 0) return 0.0;
+
+        // If RGB is all zero but alpha is present, use alpha as height
+        if (r == 0 && g == 0 && b == 0 && a > 0) {
+            return a / 255.0;
+        }
+
+        // Standard luminance-weighted brightness (Rec. 709)
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
     }
 
     public TerrainBrush getTerrainBrush() {

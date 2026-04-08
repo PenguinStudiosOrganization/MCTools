@@ -172,9 +172,8 @@ public class HeightmapSelectorGUI implements InventoryHolder {
                 imgX = Math.min(imgX, imgWidth - 1);
                 imgY = Math.min(imgY, imgHeight - 1);
                 
-                // Get pixel brightness
-                int rgb = img.getRGB(imgX, imgY);
-                int gray = (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF)) / 3;
+                // Get pixel brightness using centralized method
+                int gray = (int) (BrushManager.getPixelBrightness(img, imgX, imgY) * 255);
                 
                 String colorCode;
                 if (gray < 64) colorCode = "§0";
