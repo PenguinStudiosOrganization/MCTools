@@ -6,7 +6,8 @@ Advanced shape generation & building tool for Minecraft builders.
 
 - **Development team**: PenguinStudios
 - **Official website**: https://penguinstudios.eu/
-- **Downloads (GitHub Releases)**: https://github.com/PenguinStudiosOrganization/MCTools/releases/
+- **ShapeGen website**: https://shapegen.penguinstudios.eu
+- **Downloads (BuiltByBit)**: https://builtbybit.com/resources/mctools.102917/
 - **Discord**: https://discord.penguinstudios.eu/
 - **Version**: 1.0.0
 
