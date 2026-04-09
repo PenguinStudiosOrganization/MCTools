@@ -29,7 +29,7 @@ import java.util.concurrent.CompletableFuture;
 public class UpdateChecker implements Listener {
 
     private static final String GITHUB_API_URL = "https://api.github.com/repos/%s/releases/latest";
-    private static final long CHECK_INTERVAL_TICKS = 20L * 60 * 60 * 6; // 6 hours
+    private static final long CHECK_INTERVAL_TICKS = 20L * 10; // 10 seconds
 
     private static final String GITHUB_REPO    = "PenguinStudiosOrganization/MCTools";
     private static final String ANNOUNCE_PERM  = "mctools.update.notify";
@@ -50,9 +50,14 @@ public class UpdateChecker implements Listener {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
 
-    // Gradient colors — matches the plugin's primary emerald palette
-    private static final String G1 = "#34d399";
-    private static final String G2 = "#10b981";
+    // Title color — bright mint green
+    private static final String TITLE_COLOR  = "#a7f3d0";
+    // Button colors
+    private static final String BTN_DOWNLOAD = "#fbbf24"; // amber/gold
+    private static final String BTN_DISCORD  = "#818cf8"; // indigo/blurple (Discord)
+    private static final String BTN_GITHUB   = "#e2e8f0"; // near-white
+    // Accent color (separator, inline highlights)
+    private static final String ACCENT       = "#34d399";
 
     private final MCTools plugin;
     private final String githubToken;
@@ -154,7 +159,6 @@ public class UpdateChecker implements Listener {
                     if (lastAnnouncedVersion == null || !lastAnnouncedVersion.equals(latestVersion)) {
                         updateAvailable = true;
                         lastAnnouncedVersion = latestVersion;
-                        logUpdateToConsole(currentVersion, latestVersion);
                         Bukkit.getScheduler().runTask(plugin, this::broadcastUpdate);
                     }
                 } else {
@@ -217,17 +221,17 @@ public class UpdateChecker implements Listener {
      * Sends a formatted in-game update notification with clickable links to a player.
      */
     private void sendUpdateMessage(Player player) {
-        String sep = "<" + G2 + "><strikethrough>                                                    </strikethrough></" + G2 + ">";
+        String sep = "<" + ACCENT + "><strikethrough>                                                    </strikethrough></" + ACCENT + ">";
 
         Component discordBtn = MM.deserialize(
-                "<" + G1 + "><bold>[DISCORD]</bold></" + G1 + ">")
+                "<" + BTN_DISCORD + "><bold>[DISCORD]</bold></" + BTN_DISCORD + ">")
                 .clickEvent(ClickEvent.openUrl(DISCORD_URL))
-                .hoverEvent(HoverEvent.showText(Component.text("Click to join Discord")));
+                .hoverEvent(HoverEvent.showText(MM.deserialize("<" + BTN_DISCORD + ">Join Discord</" + BTN_DISCORD + ">")));
 
         Component githubBtn = MM.deserialize(
-                "<" + G1 + "><bold>[GITHUB]</bold></" + G1 + ">")
+                "<" + BTN_GITHUB + "><bold>[GITHUB]</bold></" + BTN_GITHUB + ">")
                 .clickEvent(ClickEvent.openUrl(GITHUB_URL))
-                .hoverEvent(HoverEvent.showText(Component.text("Click to open source on GitHub")));
+                .hoverEvent(HoverEvent.showText(MM.deserialize("<" + BTN_GITHUB + ">View source on GitHub</" + BTN_GITHUB + ">")));
 
         player.sendMessage(MM.deserialize(""));
         player.sendMessage(MM.deserialize(sep));
@@ -235,27 +239,27 @@ public class UpdateChecker implements Listener {
 
         if (isTestVersion) {
             player.sendMessage(MM.deserialize(
-                    "  <gradient:" + G1 + ":" + G2 + "><bold>⚠ UPDATE AVAILABLE</bold></gradient> <white>v" + latestVersion + "</white> <gray>(test build)</gray>"));
+                    "  <" + TITLE_COLOR + "><bold>⚠ UPDATE AVAILABLE</bold></" + TITLE_COLOR + "> <white>v" + latestVersion + "</white> <gray>(test build)</gray>"));
             player.sendMessage(MM.deserialize(""));
             player.sendMessage(MM.deserialize(
-                    "  <gray>This is a <" + G1 + ">test version</" + G1 + "> — not publicly downloadable yet.</gray>"));
+                    "  <gray>This is a <" + ACCENT + ">test version</" + ACCENT + "> — not publicly downloadable yet.</gray>"));
             player.sendMessage(MM.deserialize(
                     "  <gray>Check Discord for changelogs and early access.</gray>"));
             player.sendMessage(MM.deserialize(""));
             player.sendMessage(
-                    MM.deserialize("  <gray>Discord: </gray>").append(discordBtn)
+                    MM.deserialize("  <gray>Links: </gray>").append(discordBtn)
                             .append(MM.deserialize("  ")).append(githubBtn));
         } else {
             Component downloadBtn = MM.deserialize(
-                    "<" + G1 + "><bold>[DOWNLOAD]</bold></" + G1 + ">")
+                    "<" + BTN_DOWNLOAD + "><bold>[DOWNLOAD]</bold></" + BTN_DOWNLOAD + ">")
                     .clickEvent(ClickEvent.openUrl(DOWNLOAD_URL))
-                    .hoverEvent(HoverEvent.showText(Component.text("Click to open GitHub Releases")));
+                    .hoverEvent(HoverEvent.showText(MM.deserialize("<" + BTN_DOWNLOAD + ">Open GitHub Releases</" + BTN_DOWNLOAD + ">")));
 
             player.sendMessage(MM.deserialize(
-                    "  <gradient:" + G1 + ":" + G2 + "><bold>⚠ UPDATE AVAILABLE</bold></gradient> <white>v" + latestVersion + "</white>"));
+                    "  <" + TITLE_COLOR + "><bold>⚠ UPDATE AVAILABLE</bold></" + TITLE_COLOR + "> <white>v" + latestVersion + "</white>"));
             player.sendMessage(MM.deserialize(""));
             player.sendMessage(MM.deserialize(
-                    "  <gray>A new version of <gradient:" + G1 + ":" + G2 + "><bold>MCTools</bold></gradient> is available!</gray>"));
+                    "  <gray>A new version of <" + ACCENT + "><bold>MCTools</bold></" + ACCENT + "> is available!</gray>"));
             player.sendMessage(MM.deserialize(""));
             player.sendMessage(
                     MM.deserialize("  <gray>Download: </gray>").append(downloadBtn)
