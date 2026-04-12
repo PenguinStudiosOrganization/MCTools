@@ -1042,12 +1042,13 @@ public class MCToolsCommand implements CommandExecutor {
     }
 
     private static long packLocation(Location loc) {
-        // Use full coordinate range: x in bits [42..21], z in bits [20..0], y packed separately
-        // Shift coordinates to unsigned range to avoid sign-bit collisions
+        // x,z range ±30M → +30M gives 0..60M (26 bits each).
+        // y range -64..319 → +64 gives 0..383 (9 bits). Total 61 bits.
+        // Layout: [x:26][y:9][z:26]
         long x = loc.getBlockX() + 30_000_000L;
         long y = loc.getBlockY() + 64L;
         long z = loc.getBlockZ() + 30_000_000L;
-        return (x << 40) | (z << 16) | y;
+        return (x << 35) | (y << 26) | z;
     }
 
     private void handleNewGradientCommand(Player player, String[] args) {
