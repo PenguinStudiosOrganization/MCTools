@@ -60,6 +60,9 @@ permissions:
       mctools.shapes.ellipsoid: true
       mctools.shapes.sectioncylinder: true
       mctools.shapes.tree: true
+      mctools.shapes.staircase: true
+      mctools.shapes.roof: true
+      mctools.shapes.scene: true
   mctools.gradient:
     description: Use gradient shape commands
     default: true

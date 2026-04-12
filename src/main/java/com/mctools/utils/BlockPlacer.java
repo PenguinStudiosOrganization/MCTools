@@ -421,9 +421,9 @@ public class BlockPlacer {
                     int endIndex = Math.min(index + blocksPerTick, blocks.size());
                     for (int i = index; i < endIndex; i++) {
                         Location loc = blocks.get(i);
-                        if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
-                            loc.getBlock().setBlockData(previewData, false);
-                        }
+                        if (loc.getWorld() == null) continue;
+                        if (!loc.getChunk().isLoaded()) loc.getChunk().load(true);
+                        loc.getBlock().setBlockData(previewData, false);
                     }
                     index = endIndex;
 
@@ -503,7 +503,8 @@ public class BlockPlacer {
         private void restoreOriginal() {
             for (Map.Entry<Location, BlockData> entry : originalBlocks.entrySet()) {
                 Location loc = entry.getKey();
-                if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
+                if (loc.getWorld() != null) {
+                    if (!loc.getChunk().isLoaded()) loc.getChunk().load(true);
                     loc.getBlock().setBlockData(entry.getValue(), false);
                 }
             }
@@ -601,7 +602,8 @@ public class BlockPlacer {
             // Restore using Bukkit directly (cancel is not an edit operation)
             for (Map.Entry<Location, BlockData> entry : originalBlocks.entrySet()) {
                 Location loc = entry.getKey();
-                if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
+                if (loc.getWorld() != null) {
+                    if (!loc.getChunk().isLoaded()) loc.getChunk().load(true);
                     loc.getBlock().setBlockData(entry.getValue(), false);
                 }
             }
@@ -711,11 +713,14 @@ public class BlockPlacer {
         private void applyWithBukkit(int from, int to) {
             for (int i = from; i < to; i++) {
                 Location loc = blocks.get(i);
-                if (loc.getWorld() != null && loc.getChunk().isLoaded()) {
-                    BlockData data = gradientMap != null ? gradientMap.get(loc) : blockData;
-                    if (data != null) {
-                        loc.getBlock().setBlockData(data, false);
-                    }
+                if (loc.getWorld() == null) continue;
+                // Force-load the chunk if not loaded to prevent missing blocks
+                if (!loc.getChunk().isLoaded()) {
+                    loc.getChunk().load(true);
+                }
+                BlockData data = gradientMap != null ? gradientMap.get(loc) : blockData;
+                if (data != null) {
+                    loc.getBlock().setBlockData(data, false);
                 }
             }
         }
@@ -731,7 +736,11 @@ public class BlockPlacer {
 
             for (int i = from; i < to; i++) {
                 Location loc = blocks.get(i);
-                if (loc.getWorld() == null || !loc.getChunk().isLoaded()) continue;
+                if (loc.getWorld() == null) continue;
+                // Force-load the chunk if not loaded to prevent missing blocks
+                if (!loc.getChunk().isLoaded()) {
+                    loc.getChunk().load(true);
+                }
 
                 BlockData data = gradientMap != null ? gradientMap.get(loc) : blockData;
                 if (data == null) continue;

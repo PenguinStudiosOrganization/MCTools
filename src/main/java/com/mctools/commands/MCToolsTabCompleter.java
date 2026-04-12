@@ -29,11 +29,12 @@ public class MCToolsTabCompleter implements TabCompleter {
             "hcir", "hsq", "hrect", "hell", "hpoly",
             // 3D Shapes - Filled
             "sph", "dome", "cyl", "cone", "pyr", "arch", "torus", "tor", "wall", "helix", "hel",
-            "ellipsoid", "tube", "capsule", "tree",
+            "ellipsoid", "tube", "capsule", "tree", "stair", "roof",
             // 3D Shapes - Hollow
             "hsph", "hdome", "hcyl", "hcone", "hpyr", "harch", "htorus", "htor", "hcapsule", "hellipsoid",
+            "hroof",
             // Special
-            "scyl",
+            "scyl", "scene",
             // Utility
             "center"
     );
@@ -71,7 +72,7 @@ public class MCToolsTabCompleter implements TabCompleter {
     private static final List<String> SHAPE_NAMES = Arrays.asList(
             "circle", "square", "rectangle", "ellipse", "polygon", "star", "line", "spiral",
             "sphere", "dome", "cylinder", "cone", "pyramid", "arch", "torus", "wall", "helix",
-            "tube", "capsule", "ellipsoid", "sectioncylinder", "tree"
+            "tube", "capsule", "ellipsoid", "sectioncylinder", "tree", "staircase", "roof"
     );
 
     private static final List<String> GRADIENT_SHAPE_NAMES = Arrays.asList(
@@ -116,7 +117,7 @@ public class MCToolsTabCompleter implements TabCompleter {
             // First argument: shape/admin/gradient
             String input = args[0].toLowerCase();
 
-            completions.addAll(filterStartsWith(Arrays.asList("shape", "gradient", "path", "tree"), input));
+            completions.addAll(filterStartsWith(Arrays.asList("shape", "gradient", "path", "tree", "scene"), input));
             completions.addAll(filterStartsWith(SHAPE_COMMANDS, input));
             completions.addAll(filterStartsWith(GRADIENT_COMMANDS, input));
             completions.addAll(filterStartsWith(ADMIN_COMMANDS, input));
@@ -136,6 +137,8 @@ public class MCToolsTabCompleter implements TabCompleter {
                 completions.addAll(filterStartsWith(SCHEMATIC_ACTIONS, input));
             } else if (subCmd.equals("paste")) {
                 completions.addAll(filterStartsWith(Arrays.asList("-a", "-p"), input));
+            } else if (subCmd.equals("scene")) {
+                completions.addAll(getBlockSuggestions(player, input));
             } else if (subCmd.equals("tree")) {
                 completions.addAll(filterStartsWith(Arrays.asList(
                     "oak", "spruce", "birch", "jungle", "acacia", "dark_oak",
@@ -282,6 +285,10 @@ public class MCToolsTabCompleter implements TabCompleter {
                     completions.addAll(getParameterSuggestions(baseCmd, shapeArgIndex));
                     completions.addAll(Arrays.asList("-dir", "-interp", "-unique"));
                 }
+            } else if (subCmd.equals("scene")) {
+                // After block, suggest shape names and +offset
+                completions.addAll(filterStartsWith(SHAPE_NAMES, lastArg));
+                completions.addAll(filterStartsWith(Arrays.asList("+offset", "-h"), lastArg));
             } else if (subCmd.equals("scyl") && args.length == 5) {
                 // /mct scyl <block> <radius> <sections> <TAB> — suggest section block
                 completions.addAll(getBlockSuggestions(player, lastArg));
@@ -486,6 +493,24 @@ public class MCToolsTabCompleter implements TabCompleter {
                 else if (argIndex == 2) suggestions.addAll(Arrays.asList("2", "3", "4", "5", "6", "8", "10", "12")); // sections
                 // argIndex == 3 is sectionBlock — handled separately in onTabComplete
             }
+            case "stair" -> {
+                if (argIndex == 1) suggestions.addAll(radiusSuggestions);                          // radius
+                else if (argIndex == 2) suggestions.addAll(heightSuggestions);                     // height
+                else if (argIndex == 3) suggestions.addAll(Arrays.asList("1", "2", "3", "4", "5")); // stepWidth
+            }
+            case "roof" -> {
+                if (argIndex == 1) suggestions.addAll(Arrays.asList("10", "15", "20", "30"));     // width
+                else if (argIndex == 2) suggestions.addAll(Arrays.asList("10", "15", "20", "30")); // length
+                else if (argIndex == 3) suggestions.addAll(Arrays.asList("0.5", "1.0", "1.5", "2.0")); // pitch
+                else if (argIndex == 4) suggestions.addAll(Arrays.asList("peaked", "hip", "flat")); // style
+            }
+            case "hroof" -> {
+                if (argIndex == 1) suggestions.addAll(Arrays.asList("10", "15", "20", "30"));     // width
+                else if (argIndex == 2) suggestions.addAll(Arrays.asList("10", "15", "20", "30")); // length
+                else if (argIndex == 3) suggestions.addAll(Arrays.asList("0.5", "1.0", "1.5", "2.0")); // pitch
+                else if (argIndex == 4) suggestions.addAll(Arrays.asList("peaked", "hip", "flat")); // style
+                else if (argIndex == 5) suggestions.addAll(thicknessSuggestions);                   // thickness
+            }
         }
 
         return suggestions;
@@ -569,6 +594,8 @@ public class MCToolsTabCompleter implements TabCompleter {
             case "line"            -> "line";
             case "spiral"          -> "spi";
             case "tree"            -> "tree";
+            case "staircase"       -> "stair";
+            case "roof"            -> "roof";
             default                -> shapeName; // pass-through for short aliases
         };
     }

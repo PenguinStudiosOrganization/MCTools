@@ -67,6 +67,8 @@ public class MCToolsCommand implements CommandExecutor {
         m.put("ellipsoid",       "ellipsoid");
         m.put("sectioncylinder", "scyl");      m.put("scyl",        "scyl");
         m.put("tree",            "tree");
+        m.put("staircase",       "stair");     m.put("stair",       "stair");
+        m.put("roof",            "roof");
         SHAPE_ALIAS_MAP = Collections.unmodifiableMap(m);
 
         HOLLOW_CAPABLE = Set.of(
@@ -74,7 +76,8 @@ public class MCToolsCommand implements CommandExecutor {
             "ellipse", "ell", "polygon", "poly",
             "sphere", "sph", "dome", "cylinder", "cyl",
             "cone", "pyramid", "pyr", "arch",
-            "torus", "tor", "capsule", "ellipsoid"
+            "torus", "tor", "capsule", "ellipsoid",
+            "roof"
         );
     }
 
@@ -485,6 +488,24 @@ public class MCToolsCommand implements CommandExecutor {
                 plugin.getSchematicManager().paste(player, ignoreAir, skipPreview);
                 return true;
             }
+            case "scene" -> {
+                if (args.length < 3) {
+                    msg.sendUsage(player, "/mct scene <block> <shape> <params...> [+offset <x> <y> <z> <shape> <params...>] ...");
+                    return true;
+                }
+                if (!checkCooldown(player)) return true;
+                if (getBlockPlacer().hasActiveTask(player)) {
+                    msg.sendWarning(player, "You already have an active operation! Use /mct cancel to stop it.");
+                    return true;
+                }
+                try {
+                    handleSceneCommand(player, args);
+                } catch (IllegalArgumentException e) {
+                    msg.sendError(player, e.getMessage());
+                    getBlockPlacer().playErrorEffects(player);
+                }
+                return true;
+            }
             case "shape" -> {
                 if (args.length < 3) {
                     msg.sendUsage(player, "/mct shape <name> <block> [params...] [-h [thickness]]");
@@ -812,6 +833,223 @@ public class MCToolsCommand implements CommandExecutor {
         handleShapeCommand(player, finalAbbrev, shapeArgs);
     }
 
+    private void handleSceneCommand(Player player, String[] args) {
+        // New format: /mct scene <shape> <block_or_colors> <params> [flags] +offset x y z <shape> <block_or_colors> <params> [flags] ...
+        // Each shape group has its own block or gradient colors.
+        // If the block_or_colors arg contains '#' and ',', it's treated as gradient colors.
+        MessageUtil msg = plugin.getMessageUtil();
+        ConfigManager config = plugin.getConfigManager();
+
+        if (!player.hasPermission("mctools.shapes.scene")) {
+            msg.sendError(player, "You don't have permission to use scene!");
+            return;
+        }
+
+        if (args.length < 4) {
+            msg.sendUsage(player, "/mct scene <shape> <block_or_colors> <params...> [+offset x y z <shape> <block_or_colors> <params...>] ...");
+            return;
+        }
+
+        // Split args into groups by "+offset"
+        List<List<String>> groups = new ArrayList<>();
+        List<int[]> offsets = new ArrayList<>();
+        List<String> currentGroup = new ArrayList<>();
+        int[] currentOffset = {0, 0, 0};
+
+        for (int i = 1; i < args.length; i++) {
+            if (args[i].equalsIgnoreCase("+offset")) {
+                if (!currentGroup.isEmpty()) {
+                    groups.add(currentGroup);
+                    offsets.add(currentOffset);
+                    currentGroup = new ArrayList<>();
+                }
+                if (i + 3 >= args.length) {
+                    throw new IllegalArgumentException("Expected 3 numbers after +offset (x y z)");
+                }
+                currentOffset = new int[]{
+                    parseIntAllowNegative(args[i + 1], "offset x"),
+                    parseIntAllowNegative(args[i + 2], "offset y"),
+                    parseIntAllowNegative(args[i + 3], "offset z")
+                };
+                i += 3;
+            } else {
+                currentGroup.add(args[i]);
+            }
+        }
+        if (!currentGroup.isEmpty()) {
+            groups.add(currentGroup);
+            offsets.add(currentOffset);
+        }
+
+        if (groups.isEmpty()) {
+            throw new IllegalArgumentException("No shapes specified!");
+        }
+        if (groups.size() > 10) {
+            throw new IllegalArgumentException("Maximum 10 shapes per scene command (got " + groups.size() + ")");
+        }
+
+        Location baseLocation = player.getLocation();
+        // Combined block map: Location → BlockData (supports mixed gradient + solid)
+        Map<Long, Map.Entry<Location, BlockData>> allBlocks = new LinkedHashMap<>();
+        int totalEstimated = 0;
+
+        for (int g = 0; g < groups.size(); g++) {
+            List<String> group = groups.get(g);
+            int[] offset = offsets.get(g);
+
+            if (group.size() < 2) {
+                throw new IllegalArgumentException("Each shape needs at least: <shape> <block_or_colors> <params...>");
+            }
+
+            // group[0] = shape name, group[1] = block or gradient colors
+            String shapeName = group.get(0).toLowerCase();
+            String abbrev = SHAPE_ALIAS_MAP.get(shapeName);
+            if (abbrev == null) {
+                throw new IllegalArgumentException("Unknown shape: " + group.get(0));
+            }
+
+            String blockOrColors = group.get(1);
+            boolean isGradient = blockOrColors.contains("#") && blockOrColors.contains(",");
+
+            // Parse flags: -h, -dir, -interp, -unique from remaining args
+            boolean hollow = false;
+            String hollowThickness = "1";
+            String direction = "y";
+            String interpolation = "oklab";
+            boolean uniqueOnly = false;
+            List<String> positional = new ArrayList<>();
+
+            for (int i = 2; i < group.size(); i++) {
+                String a = group.get(i);
+                if (a.equalsIgnoreCase("-h")) {
+                    hollow = true;
+                    if (i + 1 < group.size() && isPositiveInt(group.get(i + 1))) {
+                        hollowThickness = group.get(++i);
+                    }
+                } else if (a.equalsIgnoreCase("-dir") && i + 1 < group.size()) {
+                    direction = group.get(++i).toLowerCase();
+                } else if (a.equalsIgnoreCase("-interp") && i + 1 < group.size()) {
+                    interpolation = group.get(++i).toLowerCase();
+                } else if (a.equalsIgnoreCase("-unique")) {
+                    uniqueOnly = true;
+                } else {
+                    positional.add(a);
+                }
+            }
+
+            String finalAbbrev;
+            if (hollow) {
+                if (!HOLLOW_CAPABLE.contains(shapeName)) {
+                    throw new IllegalArgumentException(group.get(0) + " does not support hollow mode.");
+                }
+                positional.add(hollowThickness);
+                finalAbbrev = "h" + abbrev;
+            } else {
+                finalAbbrev = abbrev;
+            }
+
+            // Build fake args for createShape: [abbrev, block_placeholder, ...positional]
+            String[] shapeArgs = new String[positional.size() + 2];
+            shapeArgs[0] = finalAbbrev;
+            shapeArgs[1] = "stone"; // placeholder block for parameter parsing
+            for (int i = 0; i < positional.size(); i++) {
+                shapeArgs[i + 2] = positional.get(i);
+            }
+
+            Shape shape = createShape(player, finalAbbrev, shapeArgs);
+            if (shape == null) return;
+
+            totalEstimated += shape.getEstimatedBlockCount();
+
+            Location offsetLocation = baseLocation.clone().add(offset[0], offset[1], offset[2]);
+            List<Location> shapeBlocks = shape.generate(offsetLocation);
+
+            if (isGradient) {
+                // Gradient shape
+                if (!HEX_COLORS_PATTERN.matcher(blockOrColors).matches()) {
+                    throw new IllegalArgumentException("Invalid gradient colors for shape " + shapeName + ": " + blockOrColors);
+                }
+                List<String> hexColors = new ArrayList<>();
+                for (String c : blockOrColors.split(",")) {
+                    if (!c.startsWith("#")) c = "#" + c;
+                    hexColors.add(c.toLowerCase());
+                }
+                if (hexColors.size() < 2 || hexColors.size() > 6) {
+                    throw new IllegalArgumentException("Gradient needs 2-6 colors for shape " + shapeName);
+                }
+
+                if (direction.equals("y") && gradientApplier.is2DShape(shapeBlocks)) {
+                    direction = "radial";
+                }
+                int distinctValues = gradientApplier.countDistinctAxisValues(shapeBlocks, offsetLocation, direction);
+                int numSteps = Math.max(2, Math.min(distinctValues, 50));
+
+                List<GradientEngine.GradientBlock> gradientSteps =
+                    gradientEngine.generateGradient(hexColors, numSteps, interpolation, uniqueOnly);
+
+                if (!gradientSteps.isEmpty()) {
+                    Map<Location, BlockData> gradientMap =
+                        gradientApplier.applyGradient(shapeBlocks, offsetLocation, gradientSteps, direction);
+                    for (Map.Entry<Location, BlockData> entry : gradientMap.entrySet()) {
+                        long key = packLocation(entry.getKey());
+                        allBlocks.putIfAbsent(key, entry);
+                    }
+                }
+            } else {
+                // Solid block shape
+                BlockData blockData = parseBlockData(blockOrColors);
+                if (blockData == null) {
+                    throw new IllegalArgumentException("Invalid block type for shape " + shapeName + ": " + blockOrColors);
+                }
+                for (Location loc : shapeBlocks) {
+                    long key = packLocation(loc);
+                    allBlocks.putIfAbsent(key, Map.entry(loc, blockData));
+                }
+            }
+        }
+
+        int maxBlocks = config.getMaxBlocks();
+        if (maxBlocks > 0 && totalEstimated > maxBlocks) {
+            msg.sendError(player, "Scene would place ~" + String.format("%,d", totalEstimated) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce shape sizes or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
+            return;
+        }
+
+        if (allBlocks.isEmpty()) {
+            msg.sendError(player, "No blocks to place!");
+            return;
+        }
+
+        if (maxBlocks > 0 && allBlocks.size() > maxBlocks) {
+            msg.sendError(player, "Scene would place " + String.format("%,d", allBlocks.size()) + " blocks (max: " + String.format("%,d", maxBlocks) + ")");
+            msg.sendInfo(player, "Reduce shape sizes or ask an admin to increase max-blocks in config.");
+            getBlockPlacer().playErrorEffects(player);
+            return;
+        }
+
+        // Build the final Location→BlockData map for gradient-aware placement
+        Map<Location, BlockData> finalBlockMap = new LinkedHashMap<>();
+        for (Map.Entry<Location, BlockData> entry : allBlocks.values()) {
+            finalBlockMap.put(entry.getKey(), entry.getValue());
+        }
+
+        msg.sendInfo(player, "Preparing Scene with " + groups.size() + " shapes, " + String.format("%,d", finalBlockMap.size()) + " blocks...");
+        if (finalBlockMap.size() > 1000) {
+            msg.sendRaw(player, plugin.getPerformanceMonitor().getFullPerformanceSummaryMiniMessage());
+        }
+        getBlockPlacer().placeGradientBlocks(player, finalBlockMap, "Scene (" + groups.size() + " shapes)");
+    }
+
+    private static long packLocation(Location loc) {
+        // Use full coordinate range: x in bits [42..21], z in bits [20..0], y packed separately
+        // Shift coordinates to unsigned range to avoid sign-bit collisions
+        long x = loc.getBlockX() + 30_000_000L;
+        long y = loc.getBlockY() + 64L;
+        long z = loc.getBlockZ() + 30_000_000L;
+        return (x << 40) | (z << 16) | y;
+    }
+
     private void handleNewGradientCommand(Player player, String[] args) {
         // args: ["gradient", <name>, <colors>, [params...], [-h [thick]], [flags...]]
         MessageUtil msg = plugin.getMessageUtil();
@@ -948,7 +1186,8 @@ public class MCToolsCommand implements CommandExecutor {
         "hcir", "hsq", "hrect", "hell", "hpoly",
         "sph", "dome", "cyl", "cone", "pyr", "arch", "torus", "tor", "helix", "hel", "wall", "tube", "capsule", "ellipsoid",
         "hsph", "hdome", "hcyl", "hcone", "hpyr", "harch", "htorus", "htor", "hcapsule", "hellipsoid",
-        "scyl"
+        "scyl",
+        "stair", "roof", "hroof"
     );
 
     private void handleShapeCommand(Player player, String shapeCmd, String[] args) {
@@ -1618,7 +1857,38 @@ public class MCToolsCommand implements CommandExecutor {
                     int thickness = parseThickness(args[5], config);
                     yield new Ellipsoid(rx, ry, rz, true, thickness);
                 }
-                
+
+                // Staircase
+                case "stair" -> {
+                    requireArgs(args, 5, "/mct stair <block> <radius> <height> <stepWidth>");
+                    int radius = parseRadius(args[2], config);
+                    int height = parseHeight(args[3], config);
+                    int stepWidth = parseInt(args[4], "stepWidth");
+                    if (stepWidth > radius) {
+                        throw new IllegalArgumentException("Step width cannot exceed radius!");
+                    }
+                    yield new Staircase(radius, height, stepWidth);
+                }
+
+                // Roof
+                case "roof" -> {
+                    requireArgs(args, 6, "/mct roof <block> <width> <length> <pitch> <style>");
+                    int width = parseSize(args[2], config);
+                    int length = parseSize(args[3], config);
+                    double pitch = parseFloat(args[4], "pitch", 0.1, 3.0);
+                    String style = parseRoofStyle(args[5]);
+                    yield new Roof(width, length, pitch, style);
+                }
+                case "hroof" -> {
+                    requireArgs(args, 7, "/mct hroof <block> <width> <length> <pitch> <style> <thickness>");
+                    int width = parseSize(args[2], config);
+                    int length = parseSize(args[3], config);
+                    double pitch = parseFloat(args[4], "pitch", 0.1, 3.0);
+                    String style = parseRoofStyle(args[5]);
+                    int thickness = parseThickness(args[6], config);
+                    yield new Roof(width, length, pitch, style, true, thickness);
+                }
+
                 default -> {
                     msg.sendUnknownArgument(player, cmd);
                     yield null;
@@ -1718,6 +1988,34 @@ public class MCToolsCommand implements CommandExecutor {
             throw new IllegalArgumentException("Thickness " + thickness + " exceeds maximum of " + max);
         }
         return thickness;
+    }
+
+    private double parseFloat(String value, String name, double min, double max) {
+        try {
+            double result = Double.parseDouble(value);
+            if (result < min || result > max) {
+                throw new IllegalArgumentException(name + " must be between " + min + " and " + max + "!");
+            }
+            return result;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid " + name + ": " + value);
+        }
+    }
+
+    private int parseIntAllowNegative(String value, String name) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid " + name + ": " + value);
+        }
+    }
+
+    private String parseRoofStyle(String value) {
+        String style = value.toLowerCase();
+        if (!style.equals("peaked") && !style.equals("hip") && !style.equals("flat")) {
+            throw new IllegalArgumentException("Invalid roof style: " + value + " (must be peaked, hip, or flat)");
+        }
+        return style;
     }
 
     /**
@@ -1873,6 +2171,14 @@ public class MCToolsCommand implements CommandExecutor {
         player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct capsule", "<block>", "<radius>", "<height>"), "Capsule")));
         player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct ellipsoid", "<block>", "<radius>", "<height>", "<radius>"), "Ellipsoid")));
         player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct scyl", "<block>", "<radius>", "<sections>", "<sectionBlock>"), "Section Cylinder")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct stair", "<block>", "<radius>", "<height>", "<stepWidth>"), "Spiral Staircase")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct roof", "<block>", "<width>", "<length>", "<pitch>", "<style>"), "Roof (peaked/hip/flat)")));
+
+        // Scene (composite)
+        player.sendMessage(msg.parse(""));
+        player.sendMessage(msg.parse("  " + msg.buildCategory("Composite Shapes")));
+        player.sendMessage(msg.parse(msg.buildHelpEntry(msg.buildSyntax("mct scene", "<block>", "<shape>", "<params>", "[+offset x y z ...]"), "Combine multiple shapes")));
+        player.sendMessage(msg.parse(msg.buildHint("Example: /mct scene stone cylinder 20 5 +offset 0 20 0 cone 8 6")));
 
         // Gradient Shapes
         player.sendMessage(msg.parse(""));
@@ -1958,6 +2264,9 @@ public class MCToolsCommand implements CommandExecutor {
             case "ellipsoid" -> new ShapeInfo("Ellipsoid", "/mct ellipsoid <block> <radiusX> <radiusY> <radiusZ>", "Creates an ellipsoid with different radii.");
             case "tree" -> new ShapeInfo("Tree", "/mct tree <woodType> [options]", "Generates a custom tree. Options: seed: th: tr: bd: fd: fr: -roots -special");
             case "scyl", "sectioncylinder" -> new ShapeInfo("Section Cylinder", "/mct scyl <block> <radius> <sections> <sectionBlock>", "Creates a flat disc divided into equal angular sections with divider lines.");
+            case "stair", "staircase" -> new ShapeInfo("Staircase", "/mct stair <block> <radius> <height> <stepWidth>", "Creates a spiral staircase.");
+            case "roof" -> new ShapeInfo("Roof", "/mct roof <block> <width> <length> <pitch> <style>", "Creates a roof. Styles: peaked, hip, flat. Pitch: 0.1-3.0 (1.0 = 45 degrees).");
+            case "scene" -> new ShapeInfo("Scene", "/mct scene <shape> <block_or_colors> <params> [flags] [+offset x y z ...] ...", "Combines multiple shapes (solid or gradient) into one operation. Max 10 shapes.");
             default -> null;
         };
 
